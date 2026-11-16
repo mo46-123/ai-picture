@@ -52,8 +52,8 @@ def smooth(img: np.ndarray, regions: FaceRegions, strength: float, texture_keep:
     if strength <= 0.0:
         return img
     iod = regions.iod
-    radius = max(2, int(round(0.055 * iod)))
-    eps = (0.025 + 0.045 * min(strength, 1.0)) ** 2
+    radius = max(2, int(round(0.05 * iod)))
+    eps = (0.02 + 0.035 * min(strength, 1.0)) ** 2
     base = ops.guided_smooth(img, radius, eps)
     fine = img - ops.gaussian(img, max(0.6, 0.006 * iod))
     smoothed = base + fine * float(np.clip(texture_keep, 0.0, 1.0))
@@ -70,7 +70,9 @@ def brighten(img: np.ndarray, regions: FaceRegions, amount: float,
     lab = ops.to_lab(img)
     lightness = lab[..., 0] / 100.0
     if amount > 0.0:
-        beta = 1.0 + 3.0 * float(np.clip(amount, 0.0, 1.5))
+        # Gentle on purpose: real Korean retouching brightens skin a few L* units,
+        # it doesn't turn it white (amount 0.3 ≈ +5 L* in the midtones).
+        beta = 1.0 + 1.6 * float(np.clip(amount, 0.0, 1.5))
         lifted = np.log1p((beta - 1.0) * lightness) / np.log(beta)
         lab[..., 0] = (lightness + (lifted - lightness) * mask) * 100.0
     lab[..., 1] += tone_a * mask

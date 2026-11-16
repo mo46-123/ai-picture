@@ -24,18 +24,34 @@ def lips(img: np.ndarray, face: Face, regions: FaceRegions, color: tuple[int, in
         return img
     g = float(np.clip(gradient, 0.0, 1.0))
     weight = mask * ((1.0 - g) + g * regions.lip_inner_proximity) * float(np.clip(intensity, 0.0, 1.0))
+    weight *= _corner_fade(face, regions.shape)
 
     lab = ops.to_lab(img)
     target = ops.rgb255_to_lab(color)
-    mean_l = float((lab[..., 0] * mask).sum() / max(float(mask.sum()), 1e-6))
-    lab[..., 1] += (target[1] - lab[..., 1]) * weight * 0.9
-    lab[..., 2] += (target[2] - lab[..., 2]) * weight * 0.9
-    lab[..., 0] += (target[0] - mean_l) * weight * 0.55
+    lightness = lab[..., 0]
+    mean_l = float((lightness * mask).sum() / max(float(mask.sum()), 1e-6))
+    # A tint, not paint. Real lipstick is darker and less saturated where the lip is in
+    # shadow, so the target chroma follows each pixel's own lightness.
+    shade = np.clip(lightness / max(float(target[0]), 1.0), 0.4, 1.1)
+    lab[..., 1] += (target[1] * shade - lab[..., 1]) * weight * 0.62
+    lab[..., 2] += (target[2] * shade - lab[..., 2]) * weight * 0.62
+    lab[..., 0] += (target[0] - mean_l) * weight * 0.25
     out = ops.from_lab(lab)
 
     if gloss > 0.0:
         out = _lip_gloss(out, face, regions, gloss)
     return out
+
+
+def _corner_fade(face: Face, shape: tuple[int, int]) -> np.ndarray:
+    """Fade color out toward the mouth corners (landmarks tend to overshoot there)."""
+    h, w = shape
+    ys, xs = np.mgrid[0:h, 0:w].astype(np.float32)
+    dist = np.full((h, w), np.inf, np.float32)
+    for idx in (F.MOUTH_RIGHT, F.MOUTH_LEFT):
+        cx, cy = face.pt(idx)
+        dist = np.minimum(dist, np.sqrt((xs - cx) ** 2 + (ys - cy) ** 2))
+    return smoothstep(0.0, 0.16 * face.mouth_width, dist)
 
 
 def _lip_gloss(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) -> np.ndarray:
@@ -69,12 +85,12 @@ def blush(img: np.ndarray, face: Face, regions: FaceRegions, color: tuple[int, i
     for side in ("right", "left"):
         center = (face.eye_center(side) + face.y_axis * (height * face.eye_to_nose)
                   + face.outward(side) * 0.07 * iod)
-        gaussian_ellipse(shape, center, 0.19 * iod * spread, 0.13 * iod * spread, face.angle_deg, out=weight)
+        gaussian_ellipse(shape, center, 0.24 * iod * spread, 0.16 * iod * spread, face.angle_deg, out=weight)
     weight = np.clip(weight, 0.0, 1.0) * regions.skin * float(np.clip(intensity, 0.0, 1.0))
 
     lab = ops.to_lab(img)
     target = ops.rgb255_to_lab(color)
-    w = weight * 0.6
+    w = weight * 0.3  # a diffused flush; on real photos anything stronger reads as a rash
     lab[..., 1] += (target[1] - lab[..., 1]) * w
     lab[..., 2] += (target[2] - lab[..., 2]) * w
     lab[..., 0] += (target[0] - lab[..., 0]) * w * 0.15

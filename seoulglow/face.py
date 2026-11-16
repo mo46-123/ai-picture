@@ -7,6 +7,7 @@ photo the subject's right eye appears on the left side of the image.
 
 from __future__ import annotations
 
+import atexit
 import logging
 import shutil
 import threading
@@ -164,17 +165,21 @@ class Face:
         return (float(oval[:, 0].min()), float(oval[:, 1].min()),
                 float(oval[:, 0].max()), float(oval[:, 1].max()))
 
-    def neck_polygon(self) -> np.ndarray:
-        """Jaw line extended downward into a soft trapezoid covering the neck."""
+    def neck_polygon(self, depth: float = 1.8) -> np.ndarray:
+        """Jaw line extended downward (``depth`` × IOD) into a trapezoid covering the neck."""
         top = self.pts(NECK_TOP)  # runs from the right jaw (172) via the chin to the left jaw (397)
-        down, inward = self.y_axis * 1.8 * self.iod, self.x_axis * 0.22 * self.iod
+        down, inward = self.y_axis * depth * self.iod, self.x_axis * 0.22 * self.iod
         below_left_jaw = self.pt(397) + down - inward
         below_right_jaw = self.pt(172) + down + inward
         return np.vstack([top, below_left_jaw, below_right_jaw])
 
-    def roi(self, shape: tuple[int, ...], margin: float = 0.35) -> tuple[int, int, int, int]:
-        """Integer crop (x0, y0, x1, y1) covering face + neck with a margin, clipped to image."""
-        pts = np.vstack([self.pts(FACE_OVAL), self.neck_polygon()])
+    def roi(self, shape: tuple[int, ...], margin: float = 0.8) -> tuple[int, int, int, int]:
+        """Integer crop (x0, y0, x1, y1) covering face + neck with a margin, clipped to image.
+
+        The margin must exceed the reach of the softest mask (wide skin mask + blur),
+        otherwise brightening would stop at a visible edge at the crop border.
+        """
+        pts = np.vstack([self.pts(FACE_OVAL), self.neck_polygon(depth=2.6)])
         m = margin * self.iod
         h, w = shape[:2]
         x0 = int(max(0, np.floor(pts[:, 0].min() - m)))
@@ -227,6 +232,18 @@ class FaceAnalyzer:
         )
         self._landmarker = vision.FaceLandmarker.create_from_options(options)
         self._lock = threading.Lock()
+        atexit.register(self.close)  # MediaPipe's own __del__ is noisy at interpreter shutdown
+
+    def close(self) -> None:
+        landmarker, self._landmarker = getattr(self, "_landmarker", None), None
+        if landmarker is None:
+            return
+        try:
+            landmarker.close()
+        except Exception:  # at interpreter exit MediaPipe's executor may already be gone
+            pass
+        finally:
+            landmarker.close = lambda: None  # stop MediaPipe's __del__ from closing (and failing) again
 
     def detect(self, rgb: np.ndarray) -> list[Face]:
         h, w = rgb.shape[:2]

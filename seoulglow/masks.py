@@ -114,14 +114,24 @@ class FaceRegions:
         return fill_poly(self.shape, self.face.pts(F.FACE_OVAL))
 
     @cached_property
-    def neck_poly(self) -> np.ndarray:
-        """Neck area that fades out gradually below the chin (no visible edge)."""
-        poly = fill_poly(self.shape, self.face.neck_polygon())
+    def _below_chin(self) -> np.ndarray:
+        """Distance below the chin along the face's down axis, in units of 1.2·IOD."""
         h, w = self.shape
         ys, xs = np.mgrid[0:h, 0:w].astype(np.float32)
         chin, y = self.face.pt(F.CHIN), self.face.y_axis
-        t = ((xs - chin[0]) * y[0] + (ys - chin[1]) * y[1]) / (1.2 * self.iod)
-        return poly * (1.0 - smoothstep(0.05, 0.9, t))
+        return ((xs - chin[0]) * y[0] + (ys - chin[1]) * y[1]) / (1.2 * self.iod)
+
+    @cached_property
+    def neck_poly(self) -> np.ndarray:
+        """Neck area that fades out gradually below the chin (no visible edge)."""
+        poly = fill_poly(self.shape, self.face.neck_polygon())
+        return poly * (1.0 - smoothstep(0.05, 0.9, self._below_chin))
+
+    @cached_property
+    def neck_long(self) -> np.ndarray:
+        """A longer, gentler neck region for tone changes, so face and neck stay matched."""
+        poly = fill_poly(self.shape, self.face.neck_polygon(depth=2.6))
+        return poly * (1.0 - smoothstep(0.4, 1.9, self._below_chin))
 
     @cached_property
     def face_poly_wide(self) -> np.ndarray:
@@ -150,7 +160,7 @@ class FaceRegions:
     def lips(self) -> np.ndarray:
         """Lip area only (mouth opening removed), lightly feathered."""
         raw = np.clip(self.lips_outer - self.inner_mouth, 0.0, 1.0)
-        return blur(raw, max(0.6, 0.04 * self.face.lip_thickness))
+        return blur(raw, max(0.8, 0.07 * self.face.lip_thickness))
 
     @cached_property
     def lip_inner_proximity(self) -> np.ndarray:
@@ -192,7 +202,7 @@ class FaceRegions:
                           fill_poly(self.shape, self.face.pts(F.LEFT_EYE)))
         brows = np.maximum(fill_poly(self.shape, self.face.pts(F.RIGHT_BROW)),
                            fill_poly(self.shape, self.face.pts(F.LEFT_BROW)))
-        m = np.maximum.reduce([dilate(eyes, 0.01 * self.iod), dilate(brows, 0.02 * self.iod), self.lips_outer])
+        m = np.maximum.reduce([dilate(eyes, 0.01 * self.iod), dilate(brows, 0.045 * self.iod), self.lips_outer])
         return blur(m, 0.015 * self.iod)
 
     # -- adaptive skin color model ------------------------------------------ #
@@ -209,7 +219,8 @@ class FaceRegions:
         return (sample > 0.5) & (self.face_poly > 0.5) & (self.features < 0.05)
 
     @cached_property
-    def skin_probability(self) -> np.ndarray:
+    def _skin_distance(self) -> tuple[np.ndarray, np.ndarray]:
+        """(Mahalanobis² distance to the sampled skin chroma, luma) for every pixel."""
         ycc = cv2.cvtColor(self.img.astype(np.float32), cv2.COLOR_RGB2YCrCb)
         y, crcb = ycc[..., 0], ycc[..., 1:3]
         samples = crcb[self._skin_samples()]
@@ -229,10 +240,23 @@ class FaceRegions:
         inv = np.linalg.inv(cov).astype(np.float32)
         d2 = (diff[..., 0] ** 2 * inv[0, 0] + 2 * diff[..., 0] * diff[..., 1] * inv[0, 1]
               + diff[..., 1] ** 2 * inv[1, 1])
-        prob = np.exp(-0.5 * d2 / (2.2 ** 2)).astype(np.float32)
+        return d2, y
+
+    def _probability(self, tolerance: float) -> np.ndarray:
+        d2, y = self._skin_distance
+        prob = np.exp(-0.5 * d2 / (tolerance ** 2)).astype(np.float32)
         prob *= smoothstep(0.06, 0.18, y)
         prob = close_holes(prob, 0.06 * self.iod)  # blemishes are skin too!
         return blur(prob, 0.012 * self.iod)
+
+    @cached_property
+    def skin_probability(self) -> np.ndarray:
+        return self._probability(2.2)
+
+    @cached_property
+    def skin_probability_loose(self) -> np.ndarray:
+        """More tolerant: also accepts shadowed or warmer skin (neck, ears, jaw shadow)."""
+        return self._probability(3.4)
 
     @cached_property
     def skin(self) -> np.ndarray:
@@ -244,6 +268,6 @@ class FaceRegions:
     @cached_property
     def skin_wide(self) -> np.ndarray:
         """Wider, softer skin mask for brightening / skin tone, to avoid visible edges."""
-        region = blur(np.maximum(self.face_poly_wide, self.neck_poly), 0.12 * self.iod)
-        mask = region * np.clip(self.skin_probability * 1.25, 0.0, 1.0) * (1.0 - self.features_tight)
+        region = blur(np.maximum(self.face_poly_wide, self.neck_long), 0.18 * self.iod)
+        mask = region * np.clip(self.skin_probability_loose * 1.3, 0.0, 1.0) * (1.0 - self.features_tight)
         return np.clip(mask, 0.0, 1.0).astype(np.float32)
