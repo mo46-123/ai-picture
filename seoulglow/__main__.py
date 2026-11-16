@@ -22,7 +22,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-o", "--output", type=Path, help="输出路径（默认：原文件名_风格.jpg）")
     parser.add_argument("--all", action="store_true", help="把 5 种风格都输出一遍")
     parser.add_argument("--intensity", type=float, default=1.0, help="整体强度 0~1")
-    for key, label in [("smooth", "磨皮"), ("whiten", "美白"), ("slim", "瘦脸"), ("eyes", "大眼"),
+    for key, label in [("smooth", "磨皮"), ("whiten", "美白"), ("slim", "瘦脸"), ("eyes", "大眼"), ("nose", "瘦鼻"),
                        ("makeup", "妆容"), ("filter", "滤镜")]:
         parser.add_argument(f"--{key}", type=float, help=f"{label} 0~1（默认用风格预设）")
     parser.add_argument("--lip", help="口红色号：peach / milktea / strawberry / rose / nude / none")

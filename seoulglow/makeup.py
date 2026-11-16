@@ -1,5 +1,6 @@
 """Korean-style makeup: gradient lips (咬唇妆), lip gloss (水光唇), blush (腮红),
-aegyo-sal (卧蚕), brighter eyes (亮眼) and teeth whitening.
+soft brows (韩系眉), eyeshadow (眼影), eyeliner (内眼线), aegyo-sal (卧蚕),
+brighter eyes (亮眼) and teeth whitening.
 
 Colors are applied in Lab space: hue/chroma move toward the target shade while
 the original lightness variation is kept, so lip lines and skin texture survive.
@@ -7,12 +8,13 @@ the original lightness variation is kept, so lip lines and skin texture survive.
 
 from __future__ import annotations
 
+import cv2
 import numpy as np
 
 from . import face as F
 from . import ops
 from .face import Face
-from .masks import FaceRegions, blur, gaussian_ellipse, polyline, smoothstep
+from .masks import FaceRegions, blur, dilate, fill_poly, gaussian_ellipse, polyline, smoothstep
 
 
 def lips(img: np.ndarray, face: Face, regions: FaceRegions, color: tuple[int, int, int],
@@ -33,9 +35,9 @@ def lips(img: np.ndarray, face: Face, regions: FaceRegions, color: tuple[int, in
     # A tint, not paint. Real lipstick is darker and less saturated where the lip is in
     # shadow, so the target chroma follows each pixel's own lightness.
     shade = np.clip(lightness / max(float(target[0]), 1.0), 0.4, 1.1)
-    lab[..., 1] += (target[1] * shade - lab[..., 1]) * weight * 0.62
-    lab[..., 2] += (target[2] * shade - lab[..., 2]) * weight * 0.62
-    lab[..., 0] += (target[0] - mean_l) * weight * 0.25
+    lab[..., 1] += (target[1] * shade - lab[..., 1]) * weight * 0.72
+    lab[..., 2] += (target[2] * shade - lab[..., 2]) * weight * 0.72
+    lab[..., 0] += (target[0] - mean_l) * weight * 0.3
     out = ops.from_lab(lab)
 
     if gloss > 0.0:
@@ -90,10 +92,73 @@ def blush(img: np.ndarray, face: Face, regions: FaceRegions, color: tuple[int, i
 
     lab = ops.to_lab(img)
     target = ops.rgb255_to_lab(color)
-    w = weight * 0.3  # a diffused flush; on real photos anything stronger reads as a rash
+    w = weight * 0.38  # a diffused flush; much stronger reads as a rash on real photos
     lab[..., 1] += (target[1] - lab[..., 1]) * w
     lab[..., 2] += (target[2] - lab[..., 2]) * w
     lab[..., 0] += (target[0] - lab[..., 0]) * w * 0.15
+    return ops.from_lab(lab)
+
+
+def brows(img: np.ndarray, face: Face, regions: FaceRegions, color: tuple[int, int, int],
+          amount: float) -> np.ndarray:
+    """韩系眉: fill and soften the brows toward a soft brown (only ever darkens)."""
+    if amount <= 0.0:
+        return img
+    iod = face.iod
+    mask = np.maximum(fill_poly(regions.shape, face.pts(F.RIGHT_BROW)),
+                      fill_poly(regions.shape, face.pts(F.LEFT_BROW)))
+    mask = blur(dilate(mask, 0.012 * iod), 0.018 * iod) * float(np.clip(amount, 0.0, 1.0))
+    lab = ops.to_lab(img)
+    target = ops.rgb255_to_lab(color)
+    lightness = lab[..., 0]
+    lab[..., 0] = lightness - np.clip(lightness - target[0], 0.0, None) * mask * 0.45
+    lab[..., 1] += (target[1] - lab[..., 1]) * mask * 0.35
+    lab[..., 2] += (target[2] - lab[..., 2]) * mask * 0.35
+    return ops.from_lab(lab)
+
+
+def eyeshadow(img: np.ndarray, face: Face, regions: FaceRegions, color: tuple[int, int, int],
+              amount: float) -> np.ndarray:
+    """眼影: a soft wash on the upper lid, strongest at the lash line, with a small outer wing."""
+    if amount <= 0.0:
+        return img
+    iod, y, shape = face.iod, face.y_axis, regions.shape
+    region = np.zeros(shape, np.float32)
+    lines = np.zeros(shape, np.uint8)
+    for side, lid in (("right", F.RIGHT_UPPER_LID), ("left", F.LEFT_UPPER_LID)):
+        pts = face.pts(lid)                               # outer → inner
+        heights = np.linspace(0.16, 0.09, len(pts))[:, None] * iod
+        top = pts - y[None, :] * heights
+        wing = pts[0] + face.outward(side) * 0.07 * iod - y * 0.06 * iod
+        region = np.maximum(region, fill_poly(shape, np.vstack([wing[None], pts, top[::-1]])))
+        cv2.polylines(lines, [np.round(pts).astype(np.int32)], False, 255, 1)
+    dist = cv2.distanceTransform(np.where(lines > 0, 0, 255).astype(np.uint8), cv2.DIST_L2, 3)
+    near_lashes = np.exp(-((dist / (0.07 * iod)) ** 2)).astype(np.float32)
+    weight = blur(region * (0.35 + 0.65 * near_lashes), 0.025 * iod) * (1.0 - regions.eyes)
+    weight *= float(np.clip(amount, 0.0, 1.0))
+    lab = ops.to_lab(img)
+    target = ops.rgb255_to_lab(color)
+    lab[..., 1] += (target[1] - lab[..., 1]) * weight * 0.42
+    lab[..., 2] += (target[2] - lab[..., 2]) * weight * 0.42
+    lab[..., 0] -= lab[..., 0] * 0.07 * weight
+    return ops.from_lab(lab)
+
+
+def eyeliner(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) -> np.ndarray:
+    """内眼线: a fine dark line along the outer part of the upper lash line with a short tail."""
+    if amount <= 0.0:
+        return img
+    iod, y, shape = face.iod, face.y_axis, regions.shape
+    mask = np.zeros(shape, np.float32)
+    for side, lid in (("right", F.RIGHT_UPPER_LID), ("left", F.LEFT_UPPER_LID)):
+        pts = face.pts(lid)[:7] - y * 0.004 * iod        # outer three quarters of the lid
+        tail = pts[0] + face.outward(side) * 0.045 * iod - y * 0.018 * iod
+        mask = np.maximum(mask, polyline(shape, np.vstack([tail[None], pts]), thickness=max(1.0, 0.016 * iod)))
+    mask = blur(mask, max(0.5, 0.005 * iod)) * float(np.clip(amount, 0.0, 1.0))
+    lab = ops.to_lab(img)
+    lab[..., 0] -= np.clip(lab[..., 0] - 12.0, 0.0, None) * mask * 0.55
+    lab[..., 1] *= 1.0 - 0.4 * mask
+    lab[..., 2] *= 1.0 - 0.4 * mask
     return ops.from_lab(lab)
 
 

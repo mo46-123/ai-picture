@@ -40,8 +40,22 @@ def dilate(mask: np.ndarray, radius: float) -> np.ndarray:
     r = int(round(radius))
     if r < 1:
         return mask
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))
-    return cv2.dilate(mask, kernel)
+    if r <= 3:
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))
+        return cv2.dilate(mask, kernel)
+    # Feature masks (eyes, brows, lips) are small: only work inside their bounding box.
+    x, y, bw, bh = cv2.boundingRect((mask > 0.5).astype(np.uint8))
+    if bw == 0 or bh == 0:
+        return mask
+    h, w = mask.shape
+    x0, y0 = max(0, x - r - 2), max(0, y - r - 2)
+    x1, y1 = min(w, x + bw + r + 2), min(h, y + bh + r + 2)
+    sub = mask[y0:y1, x0:x1]
+    # Large radii: a distance transform costs the same for any radius (a big kernel doesn't).
+    dist = cv2.distanceTransform((sub <= 0.5).astype(np.uint8), cv2.DIST_L2, 5)
+    out = mask.copy()
+    out[y0:y1, x0:x1] = np.maximum(sub, (dist <= radius).astype(np.float32))
+    return out
 
 
 def erode(mask: np.ndarray, radius: float) -> np.ndarray:

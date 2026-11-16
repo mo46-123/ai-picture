@@ -42,6 +42,7 @@ class Adjustments:
     whiten: float | None = None
     slim: float | None = None
     eyes: float | None = None
+    nose: float | None = None
     makeup: float | None = None
     filter: float | None = None
     lip: str | None = None
@@ -58,6 +59,7 @@ class Adjustments:
             whiten=_clamp01(data.get("whiten"), None),
             slim=_clamp01(data.get("slim"), None),
             eyes=_clamp01(data.get("eyes"), None),
+            nose=_clamp01(data.get("nose"), None),
             makeup=_clamp01(data.get("makeup"), None),
             filter=_clamp01(data.get("filter"), None),
             lip=lip,
@@ -74,8 +76,10 @@ class Params:
     tone_scale: float
     slim: float
     eyes: float
+    nose: float
     makeup: float
     filter: float
+    cleanup: float          # dark circles / folds follow the 磨皮 slider
     lip_rgb: tuple[int, int, int] | None
 
 
@@ -91,15 +95,18 @@ def resolve(preset: Preset, adj: Adjustments) -> Params:
         lip_rgb = None
     else:
         lip_rgb = LIP_SHADES[adj.lip or preset.lip].rgb
+    smooth = pick(adj.smooth, preset.smooth)
     return Params(
         preset=preset,
-        smooth=pick(adj.smooth, preset.smooth),
+        smooth=smooth,
         whiten=whiten,
         tone_scale=tone_scale,
         slim=pick(adj.slim, preset.slim),
         eyes=pick(adj.eyes, preset.eyes),
+        nose=pick(adj.nose, preset.nose),
         makeup=pick(adj.makeup, preset.default_makeup),
         filter=pick(adj.filter, preset.default_filter),
+        cleanup=min(1.5, smooth / preset.smooth) if preset.smooth > 0 else k,
         lip_rgb=lip_rgb,
     )
 
@@ -124,12 +131,19 @@ def _beautify_face(img: np.ndarray, face: Face, p: Params) -> np.ndarray:
     regions = FaceRegions(img, face)
     img = skin.remove_spots(img, regions, p.smooth)
     img = skin.smooth(img, regions, p.smooth, pr.texture)
+    img = skin.under_eye(img, face, regions, pr.dark_circles * p.cleanup)
+    img = skin.soften_folds(img, face, regions, pr.folds * p.cleanup)
     img = skin.brighten(img, regions, p.whiten, pr.tone_a * p.tone_scale, pr.tone_b * p.tone_scale)
     img = skin.matte(img, regions, pr.matte * m)
     img = skin.glass_glow(img, face, regions, pr.glow * m)
     img = makeup.blush(img, face, regions, pr.blush_rgb, pr.blush * m, pr.blush_height, pr.blush_spread)
 
     eyes = F.RIGHT_EYE + F.LEFT_EYE
+    brows = F.RIGHT_BROW + F.LEFT_BROW
+    img = _local(img, face, brows, 0.12 * iod, lambda s, f, r: makeup.brows(s, f, r, pr.brow_rgb, pr.brow * m))
+    img = _local(img, face, eyes + brows, 0.15 * iod, lambda s, f, r: makeup.eyeshadow(
+        s, f, r, pr.shadow_rgb, pr.shadow * m))
+    img = _local(img, face, eyes, 0.12 * iod, lambda s, f, r: makeup.eyeliner(s, f, r, pr.liner * m))
     if p.lip_rgb is not None:
         img = _local(img, face, F.LIPS_OUTER, 0.15 * iod, lambda s, f, r: makeup.lips(
             s, f, r, p.lip_rgb, pr.lip_intensity * m, pr.lip_gradient, pr.lip_gloss * m))
@@ -156,6 +170,7 @@ def process(rgb: np.ndarray, preset_id: str | None, adj: Adjustments | None,
 
     for face in usable:  # geometry last, so makeup moves together with the face
         img = reshape.slim_face(img, face, p.slim)
+        img = reshape.slim_nose(img, face, p.nose)
         img = reshape.enlarge_eyes(img, face, p.eyes)
 
     img = color.apply_grade(img, p.preset.grade, p.filter)

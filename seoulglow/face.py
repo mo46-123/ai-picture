@@ -34,6 +34,11 @@ RIGHT_EYE = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 
 LEFT_EYE = [263, 249, 390, 373, 374, 380, 381, 382, 362, 398, 384, 385, 386, 387, 388, 466]
 RIGHT_EYE_LOWER_LID = [7, 163, 144, 145, 153, 154, 155]   # corners excluded
 LEFT_EYE_LOWER_LID = [249, 390, 373, 374, 380, 381, 382]
+# Full lid contours, ordered from the outer corner to the inner corner.
+RIGHT_UPPER_LID = [33, 246, 161, 160, 159, 158, 157, 173, 133]
+LEFT_UPPER_LID = [263, 466, 388, 387, 386, 385, 384, 398, 362]
+RIGHT_LOWER_LID = [33, 7, 163, 144, 145, 153, 154, 155, 133]
+LEFT_LOWER_LID = [263, 249, 390, 373, 374, 380, 381, 382, 362]
 RIGHT_BROW = [46, 53, 52, 65, 55, 107, 66, 105, 63, 70]
 LEFT_BROW = [276, 283, 282, 295, 285, 336, 296, 334, 293, 300]
 NOSE_BRIDGE = [168, 6, 197, 195, 5]
@@ -48,15 +53,17 @@ RIGHT_EYE_TOP, RIGHT_EYE_BOTTOM, RIGHT_EYE_OUTER, RIGHT_EYE_INNER = 159, 145, 33
 LEFT_EYE_TOP, LEFT_EYE_BOTTOM, LEFT_EYE_OUTER, LEFT_EYE_INNER = 386, 374, 263, 362
 RIGHT_FACE_EDGE, LEFT_FACE_EDGE = 234, 454
 
-# Face-slimming contour: (landmark, relative strength, upward lift for a V-line).
-JAW_CONTOUR_RIGHT = [(234, 0.15, 0.0), (93, 0.45, 0.0), (132, 0.80, 0.1), (58, 0.95, 0.2),
-                     (172, 1.00, 0.3), (136, 0.85, 0.35), (150, 0.60, 0.35), (149, 0.35, 0.3),
-                     (176, 0.15, 0.2), (148, 0.05, 0.1)]
-JAW_CONTOUR_LEFT = [(454, 0.15, 0.0), (323, 0.45, 0.0), (361, 0.80, 0.1), (288, 0.95, 0.2),
-                    (397, 1.00, 0.3), (365, 0.85, 0.35), (379, 0.60, 0.35), (378, 0.35, 0.3),
-                    (400, 0.15, 0.2), (377, 0.05, 0.1)]
+# Face-slimming contour: (landmark, inward share, upward share) of the slimming shift.
+# Jaw corners move in the most (V-line); the chin moves up a little (small face).
+JAW_CONTOUR_RIGHT = [(234, 0.15, 0.0), (93, 0.45, 0.0), (132, 0.75, 0.05), (58, 0.95, 0.15),
+                     (172, 1.00, 0.30), (136, 0.85, 0.40), (150, 0.60, 0.45), (149, 0.35, 0.45),
+                     (176, 0.15, 0.45), (148, 0.05, 0.45)]
+JAW_CONTOUR_LEFT = [(454, 0.15, 0.0), (323, 0.45, 0.0), (361, 0.75, 0.05), (288, 0.95, 0.15),
+                    (397, 1.00, 0.30), (365, 0.85, 0.40), (379, 0.60, 0.45), (378, 0.35, 0.45),
+                    (400, 0.15, 0.45), (377, 0.05, 0.45)]
+CHIN_LIFT = [(152, 0.0, 0.45)]
 # Zero-shift anchors so the warp never drags the eyes, nose or mouth.
-SLIM_ANCHORS = [152, 4, 1, 6, 168, 61, 291, 0, 17, 33, 133, 263, 362, 10, 151]
+SLIM_ANCHORS = [4, 1, 6, 168, 61, 291, 0, 17, 33, 133, 263, 362, 10, 151]
 NECK_TOP = [172, 136, 150, 149, 176, 148, 152, 377, 400, 378, 379, 365, 397]
 
 MIN_LANDMARKS = 468

@@ -4,8 +4,8 @@
 
   const $ = (sel) => document.querySelector(sel);
   const SLIDERS = [
-    ["smooth", "磨皮"], ["whiten", "美白"], ["slim", "瘦脸"],
-    ["eyes", "大眼"], ["makeup", "妆容"], ["filter", "滤镜"],
+    ["smooth", "磨皮"], ["whiten", "美白"], ["slim", "瘦脸"], ["eyes", "大眼"],
+    ["nose", "瘦鼻"], ["makeup", "妆容"], ["filter", "滤镜"],
   ];
   const PREVIEW_SIDE = 1280;   // what we send while you adjust (fast)
   const FULL_SIDE = 2048;      // what we send when you save / use AI

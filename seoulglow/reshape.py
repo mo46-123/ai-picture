@@ -87,15 +87,15 @@ def slim_face(img: np.ndarray, face: Face, strength: float) -> np.ndarray:
     if strength <= 0.0:
         return img
     iod = face.iod
-    magnitude = 0.12 * iod * float(np.clip(strength, 0.0, 1.5))
+    magnitude = 0.13 * iod * float(np.clip(strength, 0.0, 1.5))
+    up = -face.y_axis
     centers, shifts = [], []
-    for side, contour in (("right", F.JAW_CONTOUR_RIGHT), ("left", F.JAW_CONTOUR_LEFT)):
+    for side, contour in (("right", F.JAW_CONTOUR_RIGHT + F.CHIN_LIFT),
+                          ("left", F.JAW_CONTOUR_LEFT)):
         inward = -face.outward(side)
-        for index, weight, lift in contour:
-            direction = inward - face.y_axis * lift
-            direction = direction / np.linalg.norm(direction)
+        for index, inward_share, up_share in contour:
             centers.append(face.pt(index))
-            shifts.append(direction * magnitude * weight)
+            shifts.append((inward * inward_share + up * up_share) * magnitude)
     for index in F.SLIM_ANCHORS:  # keep the inner face still
         centers.append(face.pt(index))
         shifts.append(np.zeros(2))
@@ -105,6 +105,39 @@ def slim_face(img: np.ndarray, face: Face, strength: float) -> np.ndarray:
     h, w = img.shape[:2]
     roi = (int(max(0, bx0 - pad)), int(max(0, by0 - pad)), int(min(w, bx1 + pad)), int(min(h, by1 + pad)))
     return displacement_warp(img, np.array(centers), np.array(shifts), sigma, roi)
+
+
+def slim_nose(img: np.ndarray, face: Face, strength: float) -> np.ndarray:
+    """瘦鼻: pull the nose wings toward the nose's center line; tip and cheeks stay put."""
+    if strength <= 0.0:
+        return img
+    iod, x = face.iod, face.x_axis
+    tip = face.pt(F.NOSE_TIP)
+    centers, shifts = [], []
+    for index in F.NOSE_LOWER:
+        p = face.pt(index)
+        lateral = float(np.dot(p - tip, x))
+        if abs(lateral) < 0.04 * iod:
+            continue
+        share = min(1.0, abs(lateral) / (0.18 * iod))
+        centers.append(p)
+        shifts.append(-np.sign(lateral) * x * 0.07 * iod * float(np.clip(strength, 0.0, 1.5)) * share)
+    if not centers:
+        return img
+    for index in (F.NOSE_TIP, 1, 2, 6, 0, 13):
+        centers.append(face.pt(index))
+        shifts.append(np.zeros(2))
+    for side in (-1.0, 1.0):          # cheeks beside the nose don't move
+        for dy in (-0.12, 0.12):
+            centers.append(tip + x * side * 0.5 * iod + face.y_axis * dy * iod)
+            shifts.append(np.zeros(2))
+    pts = np.array(centers)
+    sigma = 0.09 * iod
+    pad = 3.0 * sigma
+    h, w = img.shape[:2]
+    roi = (int(max(0, pts[:, 0].min() - pad)), int(max(0, pts[:, 1].min() - pad)),
+           int(min(w, pts[:, 0].max() + pad)), int(min(h, pts[:, 1].max() + pad)))
+    return displacement_warp(img, pts, np.array(shifts), sigma, roi, step=2)
 
 
 def enlarge_eyes(img: np.ndarray, face: Face, strength: float) -> np.ndarray:
