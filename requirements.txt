@@ -1,0 +1,8 @@
+numpy>=1.26
+opencv-contrib-python>=4.9
+mediapipe>=0.10.14
+pillow>=10.1
+starlette>=0.37
+uvicorn>=0.30
+python-multipart>=0.0.9
+requests>=2.31

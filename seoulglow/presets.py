@@ -1,0 +1,178 @@
+"""Korean-style presets (韩风预设) and lipstick shades (口红色号).
+
+Each preset is a complete "recipe" for the local pipeline. Makeup values are the
+*maximum* strength (the 妆容 slider at 100%); the UI starts at ``default_makeup``.
+"""
+
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass
+
+from .color import Grade
+
+
+@dataclass(frozen=True)
+class LipShade:
+    id: str
+    name: str
+    rgb: tuple[int, int, int]
+
+    @property
+    def hex(self) -> str:
+        return "#{:02X}{:02X}{:02X}".format(*self.rgb)
+
+
+LIP_SHADES: dict[str, LipShade] = {s.id: s for s in [
+    LipShade("peach", "蜜桃水光", (236, 112, 108)),
+    LipShade("milktea", "奶茶豆沙", (196, 116, 108)),
+    LipShade("strawberry", "草莓咬唇", (214, 58, 78)),
+    LipShade("rose", "冷调玫瑰", (176, 92, 112)),
+    LipShade("nude", "自然裸粉", (212, 124, 122)),
+]}
+
+
+@dataclass(frozen=True)
+class Preset:
+    id: str
+    name: str
+    name_en: str
+    tagline: str
+    description: str
+    swatch: tuple[str, str]
+    # skin
+    smooth: float
+    texture: float
+    whiten: float
+    tone_a: float          # Lab a* shift on skin (+ = rosier)
+    tone_b: float          # Lab b* shift on skin (− = less yellow)
+    glow: float            # glass-skin sheen
+    matte: float           # velvet / matte finish
+    # shape
+    slim: float
+    eyes: float
+    # makeup (at 100%)
+    lip: str
+    lip_intensity: float
+    lip_gradient: float
+    lip_gloss: float
+    blush_rgb: tuple[int, int, int]
+    blush: float
+    blush_height: float
+    blush_spread: float
+    aegyo: float
+    eye_brighten: float
+    teeth: float
+    # color
+    grade: Grade
+    default_makeup: float = 0.7
+    default_filter: float = 0.85
+
+    def ui_defaults(self) -> dict:
+        return {
+            "smooth": self.smooth, "whiten": self.whiten, "slim": self.slim, "eyes": self.eyes,
+            "makeup": self.default_makeup, "filter": self.default_filter, "lip": self.lip,
+        }
+
+    def to_public(self) -> dict:
+        return {
+            "id": self.id, "name": self.name, "name_en": self.name_en,
+            "tagline": self.tagline, "description": self.description, "swatch": list(self.swatch),
+            "defaults": self.ui_defaults(),
+        }
+
+
+PRESETS: dict[str, Preset] = {p.id: p for p in [
+    Preset(
+        id="glass_skin", name="水光肌", name_en="Glass Skin",
+        tagline="清透发光，蜜桃水光唇",
+        description="像刚敷完面膜一样水润透亮，高光点在额头、鼻梁和苹果肌，低饱和的通透粉调。",
+        swatch=("#FFE3E6", "#CDEBF6"),
+        smooth=0.6, texture=0.45, whiten=0.35, tone_a=1.5, tone_b=-4.0, glow=0.9, matte=0.0,
+        slim=0.25, eyes=0.18,
+        lip="peach", lip_intensity=0.85, lip_gradient=0.55, lip_gloss=0.9,
+        blush_rgb=(244, 150, 150), blush=0.75, blush_height=0.55, blush_spread=1.0,
+        aegyo=0.5, eye_brighten=0.6, teeth=0.6,
+        grade=Grade(exposure=0.18, contrast=-0.10, highlights=-0.25, shadows=0.30,
+                    temperature=-0.12, tint=0.10, saturation=-0.10, vibrance=0.08, fade=0.03,
+                    shadow_tint=(215, 0.25), highlight_tint=(350, 0.20),
+                    green_shift=20, green_sat=-0.20, glow=0.18),
+    ),
+    Preset(
+        id="cream_skin", name="奶油肌", name_en="Cream Skin",
+        tagline="柔雾哑光，温柔奶茶调",
+        description="细腻哑光的奶油肌，低对比的暖杏色和奶茶色滤镜，配奶茶豆沙雾面唇。",
+        swatch=("#FFF1DD", "#F1CBB3"),
+        smooth=0.7, texture=0.35, whiten=0.3, tone_a=1.2, tone_b=-1.0, glow=0.15, matte=0.7,
+        slim=0.25, eyes=0.15,
+        lip="milktea", lip_intensity=0.8, lip_gradient=0.3, lip_gloss=0.15,
+        blush_rgb=(236, 160, 140), blush=0.7, blush_height=0.55, blush_spread=1.15,
+        aegyo=0.4, eye_brighten=0.4, teeth=0.5,
+        grade=Grade(exposure=0.16, contrast=-0.20, highlights=-0.30, shadows=0.25,
+                    temperature=0.18, tint=0.06, saturation=-0.15, fade=0.07,
+                    shadow_tint=(30, 0.35), highlight_tint=(40, 0.30),
+                    green_shift=10, green_sat=-0.35, glow=0.12, grain=0.15),
+    ),
+    Preset(
+        id="kdrama", name="韩剧女主", name_en="K-Drama",
+        tagline="柔焦光晕，草莓咬唇妆",
+        description="韩剧画面般的柔光和暖粉色调，眼下腮红、明显卧蚕和渐变咬唇，带一点胶片颗粒。",
+        swatch=("#FFD5DE", "#FFE8C8"),
+        smooth=0.6, texture=0.45, whiten=0.3, tone_a=2.0, tone_b=-2.5, glow=0.5, matte=0.0,
+        slim=0.28, eyes=0.2,
+        lip="strawberry", lip_intensity=0.9, lip_gradient=0.85, lip_gloss=0.5,
+        blush_rgb=(240, 136, 150), blush=0.85, blush_height=0.42, blush_spread=1.05,
+        aegyo=0.7, eye_brighten=0.6, teeth=0.6,
+        grade=Grade(exposure=0.12, contrast=-0.12, highlights=-0.20, shadows=0.20,
+                    temperature=0.06, tint=0.16, saturation=-0.08, vibrance=0.05, fade=0.06,
+                    shadow_tint=(200, 0.30), highlight_tint=(15, 0.35),
+                    green_shift=15, green_sat=-0.25, glow=0.45, grain=0.22),
+    ),
+    Preset(
+        id="cool_tone", name="清冷感", name_en="Cool Tone",
+        tagline="冷白皮，低饱和高级感",
+        description="冷白透亮的肤色和蓝灰色调，干净克制的杂志感，配冷调玫瑰唇。",
+        swatch=("#E8EFF7", "#C8D3E4"),
+        smooth=0.65, texture=0.4, whiten=0.45, tone_a=0.5, tone_b=-5.0, glow=0.3, matte=0.2,
+        slim=0.3, eyes=0.15,
+        lip="rose", lip_intensity=0.8, lip_gradient=0.4, lip_gloss=0.3,
+        blush_rgb=(226, 150, 166), blush=0.45, blush_height=0.5, blush_spread=0.95,
+        aegyo=0.35, eye_brighten=0.5, teeth=0.6,
+        grade=Grade(exposure=0.10, contrast=0.02, highlights=-0.15, shadows=0.18,
+                    temperature=-0.24, tint=0.02, saturation=-0.22, fade=0.07,
+                    shadow_tint=(215, 0.40), highlight_tint=(195, 0.15),
+                    green_shift=25, green_sat=-0.45, glow=0.08, grain=0.12),
+    ),
+    Preset(
+        id="id_photo", name="韩式证件照", name_en="Seoul Studio",
+        tagline="棚拍质感，干净精致",
+        description="韩国照相馆精修感：明亮均匀、皮肤干净但保留质感、自然淡妆。想换纯色背景可以用 AI 写真。",
+        swatch=("#F5F7FB", "#D7E0EE"),
+        smooth=0.8, texture=0.3, whiten=0.35, tone_a=1.0, tone_b=-3.0, glow=0.25, matte=0.25,
+        slim=0.35, eyes=0.2,
+        lip="nude", lip_intensity=0.75, lip_gradient=0.2, lip_gloss=0.35,
+        blush_rgb=(238, 156, 150), blush=0.45, blush_height=0.55, blush_spread=1.0,
+        aegyo=0.5, eye_brighten=0.7, teeth=0.7,
+        grade=Grade(exposure=0.20, contrast=0.04, highlights=-0.30, shadows=0.35,
+                    temperature=-0.05, tint=0.06, saturation=-0.06, vibrance=0.10,
+                    shadow_tint=(220, 0.10), highlight_tint=(10, 0.10), glow=0.06),
+        default_makeup=0.65, default_filter=0.8,
+    ),
+]}
+
+DEFAULT_PRESET = "glass_skin"
+
+
+def get_preset(preset_id: str | None) -> Preset:
+    return PRESETS.get(preset_id or DEFAULT_PRESET, PRESETS[DEFAULT_PRESET])
+
+
+def catalog() -> dict:
+    return {
+        "presets": [p.to_public() for p in PRESETS.values()],
+        "lip_shades": [{"id": s.id, "name": s.name, "hex": s.hex} for s in LIP_SHADES.values()],
+        "default": DEFAULT_PRESET,
+    }
+
+
+def grade_dict(preset: Preset) -> dict:
+    return asdict(preset.grade)

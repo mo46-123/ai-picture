@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.env
+*.egg-info/
+.DS_Store
+.idea/
+.vscode/
+
+# downloaded at runtime (see scripts/download_models.py)
+models/*.task
+models/*.part
+
+# local test photos & outputs
+samples/private/
+*_glass_skin.jpg
+*_cream_skin.jpg
+*_kdrama.jpg
+*_cool_tone.jpg
+*_id_photo.jpg
