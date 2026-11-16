@@ -1,0 +1,5 @@
+-r requirements.txt
+pytest>=8.0
+# Starlette's TestClient: httpx2 for Starlette 1.x, httpx for older releases
+httpx2; python_version >= "3.10"
+httpx>=0.27

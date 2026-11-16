@@ -1,0 +1,1 @@
+`sample_portrait.jpg` — photo by Condor Wei on [Unsplash](https://unsplash.com/photos/a-woman-with-dark-hair-JCLH7JXSeZs) (Unsplash License), resized to 800 px. Used only by `tests/test_real_photo.py`.

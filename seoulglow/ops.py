@@ -31,6 +31,23 @@ def from_lab(lab: np.ndarray) -> np.ndarray:
     return np.clip(cv2.cvtColor(lab.astype(np.float32), cv2.COLOR_Lab2RGB), 0.0, 1.0)
 
 
+def from_lab_where(img: np.ndarray, lab: np.ndarray, weight: np.ndarray, eps: float = 1e-4) -> np.ndarray:
+    """Convert back to RGB only where an edit happened; keep every other pixel exactly.
+
+    A float RGB→Lab→RGB round trip is lossy (up to ~1.3/255 per trip, ~8/255 after
+    ten), so converting the whole image in every effect would slowly tint areas the
+    effect never touched. Only the bounding box of the edit is converted.
+    """
+    changed = weight > eps
+    x, y, w, h = cv2.boundingRect(changed.astype(np.uint8))
+    out = img.copy()
+    if w == 0 or h == 0:
+        return out
+    block = changed[y:y + h, x:x + w]
+    out[y:y + h, x:x + w][block] = from_lab(lab[y:y + h, x:x + w])[block]
+    return out
+
+
 def rgb255_to_lab(rgb: tuple[int, int, int]) -> np.ndarray:
     px = np.array([[rgb]], np.float32) / 255.0
     return cv2.cvtColor(px, cv2.COLOR_RGB2Lab)[0, 0]

@@ -112,7 +112,7 @@ def under_eye(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) 
     lab[..., 0] += lift * w * 0.9
     lab[..., 1] += (ref[1] - ops.gaussian(lab[..., 1], sigma)) * w * 0.5
     lab[..., 2] += (ref[2] - ops.gaussian(lab[..., 2], sigma)) * w * 0.5
-    return ops.from_lab(lab)
+    return ops.from_lab_where(img, lab, w)
 
 
 def soften_folds(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) -> np.ndarray:
@@ -139,7 +139,7 @@ def soften_folds(img: np.ndarray, face: Face, regions: FaceRegions, amount: floa
     sigma = 0.03 * iod
     crease = np.clip(ops.gaussian(lightness, 3.0 * sigma) - ops.gaussian(lightness, 0.6 * sigma), 0.0, 20.0)
     lab[..., 0] = lightness + crease * mask * float(np.clip(amount, 0.0, 1.5))
-    return ops.from_lab(lab)
+    return ops.from_lab_where(img, lab, mask)
 
 
 def brighten(img: np.ndarray, regions: FaceRegions, amount: float,
@@ -158,7 +158,7 @@ def brighten(img: np.ndarray, regions: FaceRegions, amount: float,
         lab[..., 0] = (lightness + (lifted - lightness) * mask) * 100.0
     lab[..., 1] += tone_a * mask
     lab[..., 2] += tone_b * mask
-    return ops.from_lab(lab)
+    return ops.from_lab_where(img, lab, mask)
 
 
 def glass_glow(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) -> np.ndarray:

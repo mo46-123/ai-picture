@@ -38,7 +38,7 @@ def lips(img: np.ndarray, face: Face, regions: FaceRegions, color: tuple[int, in
     lab[..., 1] += (target[1] * shade - lab[..., 1]) * weight * 0.72
     lab[..., 2] += (target[2] * shade - lab[..., 2]) * weight * 0.72
     lab[..., 0] += (target[0] - mean_l) * weight * 0.3
-    out = ops.from_lab(lab)
+    out = ops.from_lab_where(img, lab, weight)
 
     if gloss > 0.0:
         out = _lip_gloss(out, face, regions, gloss)
@@ -96,7 +96,7 @@ def blush(img: np.ndarray, face: Face, regions: FaceRegions, color: tuple[int, i
     lab[..., 1] += (target[1] - lab[..., 1]) * w
     lab[..., 2] += (target[2] - lab[..., 2]) * w
     lab[..., 0] += (target[0] - lab[..., 0]) * w * 0.15
-    return ops.from_lab(lab)
+    return ops.from_lab_where(img, lab, w)
 
 
 def brows(img: np.ndarray, face: Face, regions: FaceRegions, color: tuple[int, int, int],
@@ -114,7 +114,7 @@ def brows(img: np.ndarray, face: Face, regions: FaceRegions, color: tuple[int, i
     lab[..., 0] = lightness - np.clip(lightness - target[0], 0.0, None) * mask * 0.45
     lab[..., 1] += (target[1] - lab[..., 1]) * mask * 0.35
     lab[..., 2] += (target[2] - lab[..., 2]) * mask * 0.35
-    return ops.from_lab(lab)
+    return ops.from_lab_where(img, lab, mask)
 
 
 def eyeshadow(img: np.ndarray, face: Face, regions: FaceRegions, color: tuple[int, int, int],
@@ -141,7 +141,7 @@ def eyeshadow(img: np.ndarray, face: Face, regions: FaceRegions, color: tuple[in
     lab[..., 1] += (target[1] - lab[..., 1]) * weight * 0.42
     lab[..., 2] += (target[2] - lab[..., 2]) * weight * 0.42
     lab[..., 0] -= lab[..., 0] * 0.07 * weight
-    return ops.from_lab(lab)
+    return ops.from_lab_where(img, lab, weight)
 
 
 def eyeliner(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) -> np.ndarray:
@@ -159,7 +159,7 @@ def eyeliner(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) -
     lab[..., 0] -= np.clip(lab[..., 0] - 12.0, 0.0, None) * mask * 0.55
     lab[..., 1] *= 1.0 - 0.4 * mask
     lab[..., 2] *= 1.0 - 0.4 * mask
-    return ops.from_lab(lab)
+    return ops.from_lab_where(img, lab, mask)
 
 
 def aegyo_sal(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) -> np.ndarray:
@@ -181,7 +181,7 @@ def aegyo_sal(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) 
     lab = ops.to_lab(img)
     lab[..., 0] += (6.5 * band - 2.5 * crease) * amount
     lab[..., 2] += 1.0 * band * amount
-    return ops.from_lab(lab)
+    return ops.from_lab_where(img, lab, band + crease)
 
 
 def brighten_eyes(img: np.ndarray, regions: FaceRegions, amount: float) -> np.ndarray:
@@ -199,7 +199,7 @@ def brighten_eyes(img: np.ndarray, regions: FaceRegions, amount: float) -> np.nd
     sclera = mask * smoothstep(50.0, 72.0, lightness) * (1.0 - smoothstep(10.0, 26.0, chroma))
     lab[..., 1] = a * (1.0 - 0.5 * sclera * amount)
     lab[..., 2] = b * (1.0 - 0.5 * sclera * amount)
-    return ops.from_lab(lab)
+    return ops.from_lab_where(img, lab, mask)
 
 
 def whiten_teeth(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) -> np.ndarray:
@@ -214,4 +214,4 @@ def whiten_teeth(img: np.ndarray, face: Face, regions: FaceRegions, amount: floa
     lab[..., 2] *= 1.0 - 0.6 * teeth
     lab[..., 1] *= 1.0 - 0.3 * teeth
     lab[..., 0] += 7.0 * teeth
-    return ops.from_lab(lab)
+    return ops.from_lab_where(img, lab, teeth)
