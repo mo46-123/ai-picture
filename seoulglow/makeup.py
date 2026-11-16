@@ -43,7 +43,10 @@ def lips(img: np.ndarray, face: Face, regions: FaceRegions, color: tuple[int, in
     lab[..., 1] += (target[1] * shade - lab[..., 1]) * weight * 0.72
     lab[..., 2] += (target[2] * shade - lab[..., 2]) * weight * 0.72
     # Never lighten: lifting lip lightness toward a pale shade makes lips look chalky white.
-    lab[..., 0] += min(float(target[0]) - mean_l, 0.0) * 0.3 * weight
+    # Darken toward the shade freely, but lighten only lips that are much darker than it
+    # (lips in shadow) and never by much: lifting normal lips makes them chalky.
+    gap = float(target[0]) - mean_l
+    lab[..., 0] += (gap * 0.3 if gap < 0.0 else min(max(gap - 8.0, 0.0) * 0.5, 9.0)) * weight
     out = ops.from_lab_where(img, lab, weight)
 
     if gloss > 0.0:
@@ -223,8 +226,12 @@ def aegyo_sal(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) 
     return ops.from_lab_where(img, lab, band + crease)
 
 
-def brighten_eyes(img: np.ndarray, regions: FaceRegions, amount: float) -> np.ndarray:
-    """亮眼: a touch more contrast in the iris and whiter, less red sclera."""
+def brighten_eyes(img: np.ndarray, regions: FaceRegions, amount: float, face: Face | None = None) -> np.ndarray:
+    """亮眼: open up dark eyes, add contrast and a catchlight, whiten the sclera.
+
+    Eyes in shade come out as black slits; retouchers lift them until the iris and
+    the white can be told apart, then add a small catchlight so they look alive.
+    """
     if amount <= 0.0:
         return img
     mask = regions.eyes
@@ -233,12 +240,23 @@ def brighten_eyes(img: np.ndarray, regions: FaceRegions, amount: float) -> np.nd
     lab = ops.to_lab(img)
     lightness, a, b = lab[..., 0], lab[..., 1], lab[..., 2]
     mean_l = float((lightness * mask).sum() / max(float(mask.sum()), 1e-6))
-    lab[..., 0] = lightness + ((lightness - mean_l) * 0.3 + 4.0) * mask * amount
+    rescue = float(np.clip(42.0 - mean_l, 0.0, 22.0))              # extra lift for eyes lost in shadow
+    lifted = lightness + ((lightness - mean_l) * 0.35 + 4.0 + rescue) * mask * amount
+    lab[..., 0] = lifted
     chroma = np.sqrt(a * a + b * b)
-    sclera = mask * smoothstep(50.0, 72.0, lightness) * (1.0 - smoothstep(10.0, 26.0, chroma))
+    sclera = mask * smoothstep(50.0, 72.0, lifted) * (1.0 - smoothstep(10.0, 26.0, chroma))
     lab[..., 1] = a * (1.0 - 0.5 * sclera * amount)
     lab[..., 2] = b * (1.0 - 0.5 * sclera * amount)
-    return ops.from_lab_where(img, lab, mask)
+    out = ops.from_lab_where(img, lab, mask)
+    if face is not None and face.landmarks.shape[0] >= 478:        # iris centers: 468 (right), 473 (left)
+        spark = np.zeros(regions.shape, np.float32)
+        for center, edge in ((468, 469), (473, 474)):
+            r = max(1.0, float(np.linalg.norm(face.pt(center) - face.pt(edge))))
+            c = face.pt(center) + np.array([-0.3, -0.35]) * r
+            gaussian_ellipse(regions.shape, c, 0.22 * r, 0.22 * r, out=spark)
+        spark = np.clip(spark, 0.0, 1.0) * mask * (0.55 * amount)
+        out = np.clip(ops.screen(out, spark[..., None] * np.ones(3, np.float32)), 0.0, 1.0)
+    return out
 
 
 def whiten_teeth(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) -> np.ndarray:

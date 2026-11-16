@@ -189,7 +189,7 @@ def _beautify_face(img: np.ndarray, face: Face, p: Params) -> np.ndarray:
         img = _local(img, face, F.LIPS_OUTER, 0.15 * iod, lambda s, f, r: makeup.lips(
             s, f, r, lip_c, pr.lip_intensity * m, pr.lip_gradient, pr.lip_gloss * m))
     img = _local(img, face, eyes, 0.35 * iod, lambda s, f, r: makeup.aegyo_sal(s, f, r, pr.aegyo * m))
-    img = _local(img, face, eyes, 0.08 * iod, lambda s, f, r: makeup.brighten_eyes(s, r, pr.eye_brighten * m))
+    img = _local(img, face, eyes, 0.08 * iod, lambda s, f, r: makeup.brighten_eyes(s, r, pr.eye_brighten * m, face=f))
     img = _local(img, face, F.LIPS_INNER, 0.06 * iod, lambda s, f, r: makeup.whiten_teeth(
         s, f, r, pr.teeth * min(1.0, m + 0.3)))
     return img

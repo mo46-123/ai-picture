@@ -144,7 +144,7 @@ def soften_folds(img: np.ndarray, face: Face, regions: FaceRegions, amount: floa
     return ops.from_lab_where(img, lab, mask)
 
 
-NOMINAL_SKIN = (66.0, 13.0, 17.0)   # Lab of evenly lit light skin
+NOMINAL_SKIN = (68.0, 13.0, 17.0)   # Lab of evenly lit light skin
 
 
 def relight(img: np.ndarray, regions: FaceRegions, strength: float = 1.0) -> np.ndarray:
@@ -162,7 +162,7 @@ def relight(img: np.ndarray, regions: FaceRegions, strength: float = 1.0) -> np.
         return img
     lab = ops.to_lab(img)
     mean = [float((lab[..., c] * core).sum() / total) for c in range(3)]
-    gain = float(np.clip(NOMINAL_SKIN[0] / max(mean[0], 1.0) - 1.0, 0.0, 0.5))
+    gain = float(np.clip(NOMINAL_SKIN[0] / max(mean[0], 1.0) - 1.0, 0.0, 0.7))
     shift_a = float(np.clip(0.65 * (NOMINAL_SKIN[1] - mean[1]), -4.0, 10.0))
     shift_b = float(np.clip(0.65 * (NOMINAL_SKIN[2] - mean[2]), -6.0, 14.0))
     if gain < 0.03 and abs(shift_a) < 1.5 and abs(shift_b) < 1.5:
@@ -171,6 +171,18 @@ def relight(img: np.ndarray, regions: FaceRegions, strength: float = 1.0) -> np.
     lab[..., 0] *= 1.0 + gain * w
     lab[..., 1] += shift_a * w
     lab[..., 2] += shift_b * w
+    if gain > 0.15:
+        # A flatly lifted face looks pasted on. Add a soft warm key light from the side
+        # that was already brighter, so the face keeps its shape.
+        face = regions.face
+        h, wd = regions.shape
+        ys, xs = np.mgrid[0:h, 0:wd].astype(np.float32)
+        side = ((xs - face.eye_mid[0]) * face.x_axis[0] + (ys - face.eye_mid[1]) * face.x_axis[1]) / regions.iod
+        left = float((lab[..., 0] * core * (side > 0)).sum() / max(float((core * (side > 0)).sum()), 1.0))
+        right = float((lab[..., 0] * core * (side < 0)).sum() / max(float((core * (side < 0)).sum()), 1.0))
+        key = smoothstep(-0.6, 0.9, side if left >= right else -side) * w * min(1.0, gain / 0.4)
+        lab[..., 0] *= 1.0 + 0.14 * key
+        lab[..., 2] += 2.5 * key
     return ops.from_lab_where(img, lab, w)
 
 
