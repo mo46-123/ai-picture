@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#F2F0F5">
+  <meta name="description" content="上传一张自拍，一键修成韩系水光肌、奶油肌、韩剧女主等风格。">
+  <title>SeoulGlow 韩系修图</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo">SeoulGlow</span>
+        <span class="logo-ko" lang="ko">서울글로우</span>
+      </div>
+      <p class="privacy">照片只在内存里处理，不会被保存</p>
+    </header>
+
+    <main class="layout">
+      <section class="stage-wrap" aria-label="照片">
+        <div class="stage" id="stage">
+          <button class="mirror" id="pick" type="button">
+            <span class="mirror-glass" aria-hidden="true"></span>
+            <span class="mirror-title">选一张自拍</span>
+            <span class="mirror-hint">正脸、光线均匀的照片效果最好</span>
+          </button>
+          <figure class="photo" id="photo" hidden>
+            <img id="result" alt="修图后的照片">
+            <img id="original" alt="原图" hidden>
+            <span class="badge" id="badge" hidden>AI 写真</span>
+            <button class="compare" id="compare" type="button">按住看原图</button>
+            <div class="busy" id="busy" hidden><span id="busyText">正在修图…</span></div>
+          </figure>
+          <input id="file" type="file" accept="image/*" hidden>
+        </div>
+        <p class="notice" id="notice" role="status" aria-live="polite"></p>
+      </section>
+
+      <section class="controls" aria-label="修图设置">
+        <div class="pans" id="pans" role="radiogroup" aria-label="韩系风格"></div>
+        <p class="style-desc" id="styleDesc"></p>
+
+        <div class="row">
+          <h2 class="row-title">口红<span class="row-value" id="lipName"></span></h2>
+          <div class="tints" id="tints" role="radiogroup" aria-label="口红色号"></div>
+        </div>
+
+        <div class="sliders">
+          <div class="slider main">
+            <label for="intensity">强度</label>
+            <input type="range" id="intensity" min="0" max="100" value="100">
+            <output for="intensity" id="intensityOut">100</output>
+          </div>
+          <details class="fine">
+            <summary>精细调节</summary>
+            <div id="fineSliders"></div>
+          </details>
+        </div>
+
+        <nav class="actionbar" aria-label="操作">
+          <button class="btn ghost" id="again" type="button">换一张</button>
+          <button class="btn ghost" id="aiBtn" type="button">AI 写真</button>
+          <button class="btn primary" id="save" type="button" disabled>保存图片</button>
+        </nav>
+      </section>
+    </main>
+
+    <footer class="foot">
+      <p id="aiNote" hidden>AI 写真由第三方大模型生成，图片会带「AI生成」标识。</p>
+      <a href="https://github.com/mo46-123/ai-picture" id="repoLink" target="_blank" rel="noopener">在 GitHub 查看源码</a>
+    </footer>
+  </div>
+
+  <div class="sheet-backdrop" id="sheet" hidden>
+    <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+      <h2 class="sheet-title" id="sheetTitle">修好啦</h2>
+      <img id="saveImg" alt="修好的照片">
+      <p class="sheet-hint">在手机上长按图片，就能保存到相册</p>
+      <div class="sheet-actions">
+        <button class="btn ghost" id="closeSheet" type="button">完成</button>
+        <a class="btn primary" id="download" href="#" download="seoulglow.jpg">下载图片</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" role="alert" hidden></div>
+  <script src="/app.js" defer></script>
+</body>
+</html>
