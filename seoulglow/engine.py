@@ -9,7 +9,7 @@ from typing import Any, Mapping
 import cv2
 import numpy as np
 
-from . import color, makeup, reshape, skin
+from . import color, makeup, ops, reshape, skin
 from . import face as F
 from .config import Settings, get_settings
 from .face import Face, get_analyzer
@@ -128,32 +128,66 @@ def _local(img: np.ndarray, face: Face, indices: list[int], pad: float, fn) -> n
     return img
 
 
+NOMINAL_SKIN = np.array(skin.NOMINAL_SKIN, np.float32)   # Lab of evenly lit light skin
+
+
+def _skin_light(img: np.ndarray, regions: FaceRegions) -> np.ndarray:
+    """Mean Lab of the face's skin: tells us how bright and what color the light is."""
+    w = regions.skin
+    total = float(w.sum())
+    if total < 50.0:
+        return NOMINAL_SKIN
+    lab = ops.to_lab(img)
+    return np.array([float((lab[..., k] * w).sum() / total) for k in range(3)], np.float32)
+
+
+def _adapt(rgb: tuple[int, int, int], light: np.ndarray) -> np.ndarray:
+    """Re-light a makeup shade for this photo.
+
+    Shades are designed for an evenly lit face. In shade or under colored light the
+    same absolute color looks painted on (orange blush on a blue-grey face), so the
+    shade is expressed as an offset from the skin tone and dimmed with the light.
+    """
+    target = ops.rgb255_to_lab(rgb).astype(np.float32)
+    k = float(np.clip(light[0] / NOMINAL_SKIN[0], 0.45, 1.1))
+    base = NOMINAL_SKIN[1:] + 0.7 * (light[1:] - NOMINAL_SKIN[1:])
+    return np.array([target[0] * k, base[0] + (target[1] - NOMINAL_SKIN[1]) * k,
+                     base[1] + (target[2] - NOMINAL_SKIN[2]) * k], np.float32)
+
+
 def _beautify_face(img: np.ndarray, face: Face, p: Params) -> np.ndarray:
     pr, iod = p.preset, face.iod
     m = p.makeup * face.frontalness   # no makeup on faces turned away from the camera
     regions = FaceRegions(img, face)
     original = img
+    relit = skin.relight(img, regions, min(1.0, p.whiten / max(pr.whiten, 1e-6)))
+    if relit is not img:   # the skin model must be rebuilt on the corrected colors
+        img, regions = relit, FaceRegions(relit, face)
     img = skin.remove_spots(img, regions, p.smooth)
     img = skin.smooth(img, regions, p.smooth, pr.texture)
     img = skin.under_eye(img, face, regions, pr.dark_circles * p.cleanup * face.frontalness)
     img = skin.soften_folds(img, face, regions, pr.folds * p.cleanup * face.frontalness)
     img = skin.brighten(img, regions, p.whiten, pr.tone_a * p.tone_scale, pr.tone_b * p.tone_scale)
+    light = _skin_light(img, regions)                     # measure again, after brightening
+    dim = float(np.clip(light[0] / 62.0, 0.35, 1.0))     # darkening makeup is eased off on dim faces
+    blush_c, brow_c, shadow_c = _adapt(pr.blush_rgb, light), _adapt(pr.brow_rgb, light), _adapt(pr.shadow_rgb, light)
+    lip_c = _adapt(p.lip_rgb, light) if p.lip_rgb is not None else None
     img = skin.matte(img, regions, pr.matte * m)
     img = skin.glass_glow(img, face, regions, pr.glow * m, reference=original)
-    img = makeup.blush(img, face, regions, pr.blush_rgb, pr.blush * m, pr.blush_height, pr.blush_spread,
+    img = makeup.blush(img, face, regions, blush_c, pr.blush * m, pr.blush_height, pr.blush_spread,
                        nose=pr.blush_nose)
 
     eyes = F.RIGHT_EYE + F.LEFT_EYE
     brows = F.RIGHT_BROW + F.LEFT_BROW
     img = _local(img, face, brows, 0.12 * iod, lambda s, f, r: makeup.brows(
-        s, f, r, pr.brow_rgb, pr.brow * m, shape=pr.brow_shape))
+        s, f, r, brow_c, pr.brow * m * dim, shape=pr.brow_shape))
     img = _local(img, face, eyes + brows, 0.15 * iod, lambda s, f, r: makeup.eyeshadow(
-        s, f, r, pr.shadow_rgb, pr.shadow * m, outer=pr.shadow_outer))
+        s, f, r, shadow_c, pr.shadow * m * dim, outer=pr.shadow_outer))
     img = _local(img, face, eyes, 0.12 * iod, lambda s, f, r: makeup.eyeliner(
-        s, f, r, pr.liner * m, tail=pr.liner_tail, drop=pr.liner_drop))
+        s, f, r, pr.liner * m * dim, tail=pr.liner_tail, drop=pr.liner_drop))
     if p.lip_rgb is not None:
         img = _local(img, face, F.LIPS_OUTER, 0.15 * iod, lambda s, f, r: makeup.lips(
-            s, f, r, p.lip_rgb, pr.lip_intensity * m, pr.lip_gradient, pr.lip_gloss * m))
+            s, f, r, lip_c, pr.lip_intensity * m, pr.lip_gradient, pr.lip_gloss * m))
     img = _local(img, face, eyes, 0.35 * iod, lambda s, f, r: makeup.aegyo_sal(s, f, r, pr.aegyo * m))
     img = _local(img, face, eyes, 0.08 * iod, lambda s, f, r: makeup.brighten_eyes(s, r, pr.eye_brighten * m))
     img = _local(img, face, F.LIPS_INNER, 0.06 * iod, lambda s, f, r: makeup.whiten_teeth(

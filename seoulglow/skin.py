@@ -144,6 +144,36 @@ def soften_folds(img: np.ndarray, face: Face, regions: FaceRegions, amount: floa
     return ops.from_lab_where(img, lab, mask)
 
 
+NOMINAL_SKIN = (66.0, 13.0, 17.0)   # Lab of evenly lit light skin
+
+
+def relight(img: np.ndarray, regions: FaceRegions, strength: float = 1.0) -> np.ndarray:
+    """补光: bring a face that is in shade or under colored light back to normal light.
+
+    A retoucher's first move on a dim, blue-grey face is to lift its exposure and
+    neutralize the cast; makeup put on top of uncorrected shade looks like paint.
+    Well-lit faces are left alone.
+    """
+    if strength <= 0.0:
+        return img
+    core = regions.skin
+    total = float(core.sum())
+    if total < 50.0:
+        return img
+    lab = ops.to_lab(img)
+    mean = [float((lab[..., c] * core).sum() / total) for c in range(3)]
+    gain = float(np.clip(NOMINAL_SKIN[0] / max(mean[0], 1.0) - 1.0, 0.0, 0.5))
+    shift_a = float(np.clip(0.65 * (NOMINAL_SKIN[1] - mean[1]), -4.0, 10.0))
+    shift_b = float(np.clip(0.65 * (NOMINAL_SKIN[2] - mean[2]), -6.0, 14.0))
+    if gain < 0.03 and abs(shift_a) < 1.5 and abs(shift_b) < 1.5:
+        return img
+    w = regions.face_light * float(np.clip(strength, 0.0, 1.0))
+    lab[..., 0] *= 1.0 + gain * w
+    lab[..., 1] += shift_a * w
+    lab[..., 2] += shift_b * w
+    return ops.from_lab_where(img, lab, w)
+
+
 def brighten(img: np.ndarray, regions: FaceRegions, amount: float,
              tone_a: float = 0.0, tone_b: float = 0.0) -> np.ndarray:
     """Lift skin lightness with a log curve and nudge its hue (a: +pink, b: -yellow)."""

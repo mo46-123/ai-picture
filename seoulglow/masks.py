@@ -304,6 +304,18 @@ class FaceRegions:
         return np.clip(mask, 0.0, 1.0).astype(np.float32)
 
     @cached_property
+    def face_light(self) -> np.ndarray:
+        """Everything that belongs to the face (skin *and* eyes, brows, lips) plus the neck:
+        the area whose exposure and color cast are corrected together."""
+        # Inside the face outline everything is corrected, whatever its color: on a face
+        # lit by two light sources (warm shade + blue sky) the color model rejects the
+        # highlights, and skipping them would leave blue patches behind.
+        inside = blur(self.face_poly, 0.05 * self.iod)
+        around = blur(np.maximum(self.face_poly_wide, self.neck_long), 0.15 * self.iod)
+        around = around * np.clip(self.skin_probability_loose * 1.3, 0.0, 1.0)
+        return np.clip(np.maximum(inside, around), 0.0, 1.0).astype(np.float32)
+
+    @cached_property
     def skin_wide(self) -> np.ndarray:
         """Wider, softer skin mask for brightening / skin tone, to avoid visible edges."""
         region = blur(np.maximum(self.face_poly_wide, self.neck_long), 0.18 * self.iod)

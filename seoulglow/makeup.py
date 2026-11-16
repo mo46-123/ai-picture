@@ -17,6 +17,11 @@ from .face import Face
 from .masks import FaceRegions, blur, dilate, fill_poly, gaussian_ellipse, polyline, smoothstep
 
 
+def _lab(color) -> np.ndarray:
+    """Accept a shade as an (r, g, b) tuple or as an already light-adapted Lab triple."""
+    return color if isinstance(color, np.ndarray) else ops.rgb255_to_lab(color)
+
+
 def lips(img: np.ndarray, face: Face, regions: FaceRegions, color: tuple[int, int, int],
          intensity: float, gradient: float = 0.5, gloss: float = 0.0) -> np.ndarray:
     if intensity <= 0.0:
@@ -29,7 +34,7 @@ def lips(img: np.ndarray, face: Face, regions: FaceRegions, color: tuple[int, in
     weight *= _corner_fade(face, regions.shape)
 
     lab = ops.to_lab(img)
-    target = ops.rgb255_to_lab(color)
+    target = _lab(color)
     lightness = lab[..., 0]
     mean_l = float((lightness * mask).sum() / max(float(mask.sum()), 1e-6))
     # A tint, not paint. Real lipstick is darker and less saturated where the lip is in
@@ -38,7 +43,7 @@ def lips(img: np.ndarray, face: Face, regions: FaceRegions, color: tuple[int, in
     lab[..., 1] += (target[1] * shade - lab[..., 1]) * weight * 0.72
     lab[..., 2] += (target[2] * shade - lab[..., 2]) * weight * 0.72
     # Never lighten: lifting lip lightness toward a pale shade makes lips look chalky white.
-    lab[..., 0] += (min(float(target[0]) - mean_l, 0.0) * 0.3 - 2.0) * weight
+    lab[..., 0] += min(float(target[0]) - mean_l, 0.0) * 0.3 * weight
     out = ops.from_lab_where(img, lab, weight)
 
     if gloss > 0.0:
@@ -95,7 +100,7 @@ def blush(img: np.ndarray, face: Face, regions: FaceRegions, color: tuple[int, i
     weight = np.clip(weight, 0.0, 1.0) * regions.skin * float(np.clip(intensity, 0.0, 1.0))
 
     lab = ops.to_lab(img)
-    target = ops.rgb255_to_lab(color)
+    target = _lab(color)
     # Cheeks that are already flushed (sun, natural redness) need far less blush.
     total = float(weight.sum())
     if total > 1.0:
@@ -131,7 +136,7 @@ def brows(img: np.ndarray, face: Face, regions: FaceRegions, color: tuple[int, i
     if shape != 0.0:
         mask = np.maximum(mask, blur(extra, 0.012 * iod) * float(np.clip(amount * abs(shape), 0.0, 1.0)))
     lab = ops.to_lab(img)
-    target = ops.rgb255_to_lab(color)
+    target = _lab(color)
     lightness = lab[..., 0]
     lab[..., 0] = lightness - np.clip(lightness - target[0], 0.0, None) * mask * 0.45
     lab[..., 1] += (target[1] - lab[..., 1]) * mask * 0.35
@@ -159,7 +164,7 @@ def eyeshadow(img: np.ndarray, face: Face, regions: FaceRegions, color: tuple[in
     weight = blur(region * (0.35 + 0.65 * near_lashes), 0.025 * iod) * (1.0 - regions.eyes)
     weight *= float(np.clip(amount, 0.0, 1.0))
     lab = ops.to_lab(img)
-    target = ops.rgb255_to_lab(color)
+    target = _lab(color)
     lab[..., 1] += (target[1] - lab[..., 1]) * weight * 0.42
     lab[..., 2] += (target[2] - lab[..., 2]) * weight * 0.42
     lab[..., 0] -= lab[..., 0] * 0.07 * weight
