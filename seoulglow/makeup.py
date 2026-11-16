@@ -96,6 +96,11 @@ def blush(img: np.ndarray, face: Face, regions: FaceRegions, color: tuple[int, i
 
     lab = ops.to_lab(img)
     target = ops.rgb255_to_lab(color)
+    # Cheeks that are already flushed (sun, natural redness) need far less blush.
+    total = float(weight.sum())
+    if total > 1.0:
+        cheek_a = float((lab[..., 1] * weight).sum() / total)
+        weight = weight * float(np.clip((float(target[1]) - cheek_a) / 14.0, 0.25, 1.0))
     w = weight * 0.38  # a diffused flush; much stronger reads as a rash on real photos
     lab[..., 1] += (target[1] - lab[..., 1]) * w
     lab[..., 2] += (target[2] - lab[..., 2]) * w
@@ -104,7 +109,7 @@ def blush(img: np.ndarray, face: Face, regions: FaceRegions, color: tuple[int, i
 
 
 def brows(img: np.ndarray, face: Face, regions: FaceRegions, color: tuple[int, int, int],
-          amount: float) -> np.ndarray:
+          amount: float, shape: float = 0.0) -> np.ndarray:
     """韩系眉: fill and soften the brows toward a soft brown (only ever darkens)."""
     if amount <= 0.0:
         return img
@@ -112,6 +117,19 @@ def brows(img: np.ndarray, face: Face, regions: FaceRegions, color: tuple[int, i
     mask = np.maximum(fill_poly(regions.shape, face.pts(F.RIGHT_BROW)),
                       fill_poly(regions.shape, face.pts(F.LEFT_BROW)))
     mask = blur(dilate(mask, 0.012 * iod), 0.018 * iod) * float(np.clip(amount, 0.0, 1.0))
+    # shape > 0: straight "一字眉" — fill the hollow under the arch so the lower edge is flat.
+    # shape < 0: a slightly lifted, longer tail for a cooler, more defined brow.
+    extra = np.zeros(regions.shape, np.float32)
+    for side, brow in (("right", F.RIGHT_BROW), ("left", F.LEFT_BROW)):
+        lower, upper = face.pts(brow[:5]), face.pts(brow[5:])      # outer→inner, inner→outer
+        if shape > 0.0:
+            chord = np.linspace(lower[-1], lower[0], 5) + face.y_axis * 0.012 * iod
+            extra = np.maximum(extra, fill_poly(regions.shape, np.vstack([lower, chord])))
+        elif shape < 0.0:
+            tip = upper[-1] + face.outward(side) * 0.06 * iod - face.y_axis * 0.025 * iod
+            extra = np.maximum(extra, fill_poly(regions.shape, np.vstack([upper[-2], tip, lower[0], lower[1]])))
+    if shape != 0.0:
+        mask = np.maximum(mask, blur(extra, 0.012 * iod) * float(np.clip(amount * abs(shape), 0.0, 1.0)))
     lab = ops.to_lab(img)
     target = ops.rgb255_to_lab(color)
     lightness = lab[..., 0]

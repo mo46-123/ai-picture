@@ -234,6 +234,12 @@ class FaceRegions:
         lum = ops.luminance(self.img)
         detail = np.abs(lum - ops.gaussian(lum, max(1.5, 0.03 * iod)))
         lines = smoothstep(0.045, 0.09, detail) * zone
+        # Keep only long structures: a frame runs across the eye area, a mole or pimple
+        # is a small blob and must stay in the skin mask so it can be removed.
+        count, labels, stats, _ = cv2.connectedComponentsWithStats((lines > 0.5).astype(np.uint8), connectivity=8)
+        long_enough = np.maximum(stats[:, cv2.CC_STAT_WIDTH], stats[:, cv2.CC_STAT_HEIGHT]) >= 0.3 * iod
+        long_enough[0] = False
+        lines = lines * long_enough[labels]
         return np.clip(blur(dilate(lines, max(1.0, 0.012 * iod)), 0.01 * iod), 0.0, 1.0)
 
     # -- adaptive skin color model ------------------------------------------ #

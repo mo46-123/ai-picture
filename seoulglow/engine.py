@@ -6,6 +6,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
+import cv2
 import numpy as np
 
 from . import color, makeup, reshape, skin
@@ -16,6 +17,7 @@ from .imageio import decode_image, encode_jpeg, to_float, to_uint8
 from .masks import FaceRegions
 from .presets import LIP_SHADES, Preset, get_preset
 
+WORK_IOD = 200.0   # faces larger than this (eye distance, px) are retouched at reduced size
 MIN_IOD_PX = 16.0  # faces smaller than this are too tiny for landmark-based edits
 
 _UNSET: Any = object()
@@ -143,7 +145,8 @@ def _beautify_face(img: np.ndarray, face: Face, p: Params) -> np.ndarray:
 
     eyes = F.RIGHT_EYE + F.LEFT_EYE
     brows = F.RIGHT_BROW + F.LEFT_BROW
-    img = _local(img, face, brows, 0.12 * iod, lambda s, f, r: makeup.brows(s, f, r, pr.brow_rgb, pr.brow * m))
+    img = _local(img, face, brows, 0.12 * iod, lambda s, f, r: makeup.brows(
+        s, f, r, pr.brow_rgb, pr.brow * m, shape=pr.brow_shape))
     img = _local(img, face, eyes + brows, 0.15 * iod, lambda s, f, r: makeup.eyeshadow(
         s, f, r, pr.shadow_rgb, pr.shadow * m, outer=pr.shadow_outer))
     img = _local(img, face, eyes, 0.12 * iod, lambda s, f, r: makeup.eyeliner(
@@ -170,7 +173,20 @@ def process(rgb: np.ndarray, preset_id: str | None, adj: Adjustments | None,
         if x1 - x0 < 8 or y1 - y0 < 8:
             continue
         crop = np.ascontiguousarray(img[y0:y1, x0:x1])
-        img[y0:y1, x0:x1] = _beautify_face(crop, face.shifted(-x0, -y0), p)
+        local = face.shifted(-x0, -y0)
+        if face.iod > WORK_IOD * 1.15:
+            # Big close-up: compute the retouch on a smaller copy and add the *change*
+            # back at full size. The photo's own fine detail is untouched, and the
+            # cost no longer grows with the size of the face.
+            scale = WORK_IOD / face.iod
+            small = cv2.resize(crop, (max(8, round(crop.shape[1] * scale)), max(8, round(crop.shape[0] * scale))),
+                               interpolation=cv2.INTER_AREA)
+            sx, sy = small.shape[1] / crop.shape[1], small.shape[0] / crop.shape[0]
+            delta = _beautify_face(small.copy(), Face(local.landmarks * np.array([sx, sy])), p) - small
+            delta = cv2.resize(delta, (crop.shape[1], crop.shape[0]), interpolation=cv2.INTER_CUBIC)
+            img[y0:y1, x0:x1] = np.clip(crop + delta, 0.0, 1.0)
+        else:
+            img[y0:y1, x0:x1] = _beautify_face(crop, local, p)
 
     for face in usable:  # geometry last, so makeup moves together with the face
         k = face.frontalness

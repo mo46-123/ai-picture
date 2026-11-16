@@ -72,6 +72,7 @@ class Preset:
     liner_drop: float      # + = tail points down (puppy eye), − = lifted
     shadow_outer: float    # smoky outer corner
     blush_nose: float      # blush on the nose tip
+    brow_shape: float      # + straight brow (一字眉), − lifted tail
     # skin clean-up (follows the 磨皮 slider)
     dark_circles: float
     folds: float
@@ -107,7 +108,7 @@ PRESETS: dict[str, Preset] = {p.id: p for p in [
         blush_rgb=(244, 150, 140), blush=0.9, blush_height=0.6, blush_spread=1.3,
         aegyo=0.5, eye_brighten=0.6, teeth=0.6,
         brow_rgb=(122, 94, 80), brow=0.45, shadow_rgb=(238, 160, 132), shadow=0.6, liner=0.3,
-        liner_tail=0.03, liner_drop=0.0, shadow_outer=0.0, blush_nose=0.5,
+        liner_tail=0.03, liner_drop=0.0, shadow_outer=0.0, blush_nose=0.5, brow_shape=0.4,
         dark_circles=0.75, folds=0.6,
         grade=Grade(exposure=0.10, contrast=0.02, highlights=-0.08, shadows=0.22,
                     temperature=-0.08, tint=0.06, saturation=-0.08, vibrance=0.08, fade=0.0,
@@ -125,7 +126,7 @@ PRESETS: dict[str, Preset] = {p.id: p for p in [
         blush_rgb=(226, 150, 120), blush=0.75, blush_height=0.75, blush_spread=1.25,
         aegyo=0.35, eye_brighten=0.45, teeth=0.5,
         brow_rgb=(128, 100, 84), brow=0.6, shadow_rgb=(190, 132, 104), shadow=0.85, liner=0.3,
-        liner_tail=0.03, liner_drop=0.0, shadow_outer=0.25, blush_nose=0.0,
+        liner_tail=0.03, liner_drop=0.0, shadow_outer=0.25, blush_nose=0.0, brow_shape=0.3,
         dark_circles=0.75, folds=0.6,
         grade=Grade(exposure=0.18, contrast=-0.18, highlights=-0.30, shadows=0.25,
                     temperature=0.07, tint=0.04, saturation=-0.10, fade=0.05,
@@ -143,7 +144,7 @@ PRESETS: dict[str, Preset] = {p.id: p for p in [
         blush_rgb=(240, 130, 150), blush=0.85, blush_height=0.36, blush_spread=1.05,
         aegyo=1.0, eye_brighten=0.75, teeth=0.6,
         brow_rgb=(128, 98, 84), brow=0.4, shadow_rgb=(236, 140, 150), shadow=0.6, liner=0.6,
-        liner_tail=0.06, liner_drop=0.035, shadow_outer=0.0, blush_nose=0.8,
+        liner_tail=0.06, liner_drop=0.035, shadow_outer=0.0, blush_nose=0.8, brow_shape=0.9,
         dark_circles=0.75, folds=0.6,
         grade=Grade(exposure=0.12, contrast=-0.12, highlights=-0.20, shadows=0.20,
                     temperature=0.04, tint=0.08, saturation=-0.08, vibrance=0.05, fade=0.06,
@@ -161,7 +162,7 @@ PRESETS: dict[str, Preset] = {p.id: p for p in [
         blush_rgb=(214, 164, 160), blush=0.25, blush_height=0.7, blush_spread=0.9,
         aegyo=0.0, eye_brighten=0.5, teeth=0.6,
         brow_rgb=(84, 72, 70), brow=0.8, shadow_rgb=(150, 118, 118), shadow=0.8, liner=0.85,
-        liner_tail=0.09, liner_drop=-0.03, shadow_outer=1.0, blush_nose=0.0,
+        liner_tail=0.09, liner_drop=-0.03, shadow_outer=1.0, blush_nose=0.0, brow_shape=-0.8,
         dark_circles=0.8, folds=0.6,
         grade=Grade(exposure=0.10, contrast=0.02, highlights=-0.15, shadows=0.18,
                     temperature=-0.15, tint=0.02, saturation=-0.12, fade=0.07,
