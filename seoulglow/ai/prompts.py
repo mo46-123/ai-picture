@@ -29,8 +29,6 @@ STYLE_ZH = {
               "草莓色渐变咬唇妆，眼下位置的粉色腮红，自然的卧蚕，眼神清澈有光。保持原图构图和背景。",
     "cool_tone": "把这张人像修成韩系「清冷感」：冷白透亮的肤色，低饱和、偏冷的蓝灰色调，干净高级的杂志感；"
                  "冷调玫瑰色唇妆，极淡的腮红，清透干净的底妆。保持原图构图和背景。",
-    "id_photo": "把这张人像修成「韩式证件照」（韩国照相馆精修风格）：正面、肩部以上构图，背景换成干净柔和的浅灰蓝纯色，"
-                "柔和均匀的棚拍灯光，皮肤干净无瑕但保留质感，自然的韩系淡妆，碎发整理整齐，整体精致高级。",
 }
 STYLE_EN = {
     "glass_skin": "Retouch this portrait in the Korean 'glass skin' style: clear, dewy, luminous skin with a "
@@ -46,9 +44,6 @@ STYLE_EN = {
     "cool_tone": "Retouch this portrait in a cool, elegant Korean style: porcelain cool-toned skin, a desaturated "
                  "blue-gray palette, clean magazine look, cool rose lips, a barely-there blush and a clear, "
                  "fresh base. Keep the original framing and background.",
-    "id_photo": "Turn this portrait into a Korean studio ID photo: front-facing, head-and-shoulders framing, a clean "
-                "soft light gray-blue solid background, soft even studio lighting, flawless but realistic skin, "
-                "natural Korean makeup and neatly tidied flyaway hair; refined and polished.",
 }
 
 NEGATIVE_ZH = "换脸, 不像本人, 改变五官, 塑料感皮肤, 过度磨皮, 蜡像感, 卡通, 动漫, 畸形, 多余的手指, 文字, 水印, 低分辨率, 过饱和"

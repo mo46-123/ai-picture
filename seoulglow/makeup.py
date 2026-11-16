@@ -37,7 +37,8 @@ def lips(img: np.ndarray, face: Face, regions: FaceRegions, color: tuple[int, in
     shade = np.clip(lightness / max(float(target[0]), 1.0), 0.4, 1.1)
     lab[..., 1] += (target[1] * shade - lab[..., 1]) * weight * 0.72
     lab[..., 2] += (target[2] * shade - lab[..., 2]) * weight * 0.72
-    lab[..., 0] += (target[0] - mean_l) * weight * 0.3
+    # Never lighten: lifting lip lightness toward a pale shade makes lips look chalky white.
+    lab[..., 0] += (min(float(target[0]) - mean_l, 0.0) * 0.3 - 2.0) * weight
     out = ops.from_lab_where(img, lab, weight)
 
     if gloss > 0.0:
@@ -70,7 +71,8 @@ def _lip_gloss(img: np.ndarray, face: Face, regions: FaceRegions, amount: float)
     mean = float((lum * mask).sum() / max(float(mask.sum()), 1e-6))
     texture = 0.55 + 0.9 * np.clip((lum - mean) * 4.0 + 0.5, 0.0, 1.0)  # follow natural lip texture
     spec = np.clip(spec, 0.0, 1.0) * mask * texture
-    return np.clip(ops.screen(img, spec[..., None] * (0.55 * amount)), 0.0, 1.0)
+    # Kept subtle and tinted with the lip's own color: a white specular patch looks fake.
+    return np.clip(ops.screen(img, spec[..., None] * img * (0.3 * amount)), 0.0, 1.0)
 
 
 def blush(img: np.ndarray, face: Face, regions: FaceRegions, color: tuple[int, int, int],

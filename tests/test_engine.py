@@ -35,7 +35,7 @@ def test_unknown_preset_falls_back_to_default():
 
 def test_catalog_lists_every_slider():
     data = catalog()
-    assert len(data["presets"]) == 5 and len(data["lip_shades"]) == 5
+    assert len(data["presets"]) == 4 and len(data["lip_shades"]) == 5
     for p in data["presets"]:
         assert set(p["defaults"]) == {"smooth", "whiten", "slim", "eyes", "nose", "makeup", "filter", "lip"}
 

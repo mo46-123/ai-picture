@@ -69,7 +69,9 @@ def smooth(img: np.ndarray, regions: FaceRegions, strength: float, texture_keep:
     radius = max(2, int(round(0.05 * iod)))
     eps = (0.02 + 0.035 * min(strength, 1.0)) ** 2
     base = ops.guided_smooth(img, radius, eps)
-    fine = img - ops.gaussian(img, max(0.6, 0.006 * iod))
+    # Frequency separation: everything finer than ~1% of the eye distance is pore
+    # texture and is kept almost entirely; only the uneven mid frequencies are flattened.
+    fine = img - ops.gaussian(img, max(0.8, 0.011 * iod))
     smoothed = base + fine * float(np.clip(texture_keep, 0.0, 1.0))
     weight = regions.skin * float(np.clip(strength, 0.0, 1.0))
     return np.clip(ops.lerp(img, smoothed, weight), 0.0, 1.0)
@@ -161,34 +163,51 @@ def brighten(img: np.ndarray, regions: FaceRegions, amount: float,
     return ops.from_lab_where(img, lab, mask)
 
 
-def glass_glow(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) -> np.ndarray:
-    """水光肌: soft specular sheen on the high points of the face + a gentle skin bloom."""
+def glass_glow(img: np.ndarray, face: Face, regions: FaceRegions, amount: float,
+               reference: np.ndarray | None = None) -> np.ndarray:
+    """水光肌: a dewy, slightly oily shine rather than a flat white glow.
+
+    1. The skin's own highlights are taken from ``reference`` (the photo before
+       smoothing, which would otherwise flatten them) and amplified, so the shine
+       sits exactly where light really hits and keeps its sparkle.
+    2. Small, tight specular spots are added on the high points of the face
+       (nose bridge and tip, cheekbones, cupid's bow, chin, forehead).
+    3. Midtones get a touch more contrast: wet-looking skin is glossy, not pale.
+    """
     if amount <= 0.0:
         return img
     iod, shape, ang = face.iod, regions.shape, face.angle_deg
     y = face.y_axis
-    sheen = np.zeros(shape, np.float32)
-    gaussian_ellipse(shape, face.brow_mid - y * 0.38 * iod, 0.20 * iod, 0.09 * iod, ang, out=sheen, weight=0.75)
-    bridge = (face.pt(6) + face.pt(197) + face.pt(195)) / 3.0
-    gaussian_ellipse(shape, bridge, 0.035 * iod, 0.16 * iod, ang, out=sheen, weight=1.0)
-    for side in ("right", "left"):
-        c = face.eye_center(side) + y * 0.30 * iod + face.outward(side) * 0.16 * iod
-        tilt = ang + (-18.0 if side == "left" else 18.0)
-        gaussian_ellipse(shape, c, 0.15 * iod, 0.07 * iod, tilt, out=sheen, weight=0.95)
-    gaussian_ellipse(shape, face.pt(152) - y * 0.16 * iod, 0.09 * iod, 0.05 * iod, ang, out=sheen, weight=0.55)
-    gaussian_ellipse(shape, face.pt(0) - y * 0.04 * iod, 0.05 * iod, 0.02 * iod, ang, out=sheen, weight=0.45)
-
     skin = regions.skin
     lum = ops.luminance(img)
-    # Real sheen follows existing light: brighter skin catches more of it.
-    sheen = np.clip(sheen, 0.0, 1.0) * skin * (0.45 + 0.55 * smoothstep(0.25, 0.85, lum))
-    tint = np.array([1.0, 0.975, 0.965], np.float32)
-    out = ops.screen(img, sheen[..., None] * tint * (0.42 * amount))
 
-    # Dewy bloom: blur the brightest skin areas and screen them back softly.
-    bright = out * (skin * smoothstep(0.55, 0.95, lum))[..., None]
-    bloom = ops.gaussian(bright, 0.06 * iod)
-    out = ops.screen(out, bloom * (0.35 * amount))
+    # 1) natural highlights, amplified
+    ref_lum = ops.luminance(reference) if reference is not None else lum
+    local = ops.gaussian(ref_lum, 0.09 * iod)
+    natural = np.clip(ref_lum - local, 0.0, 0.25) * skin * smoothstep(0.35, 0.7, ref_lum)
+
+    # 2) placed specular spots (tight cores)
+    spots = np.zeros(shape, np.float32)
+    bridge = (face.pt(6) + face.pt(197) + face.pt(195)) / 3.0
+    gaussian_ellipse(shape, bridge, 0.022 * iod, 0.13 * iod, ang, out=spots, weight=1.0)
+    gaussian_ellipse(shape, face.pt(F.NOSE_TIP) - y * 0.03 * iod, 0.035 * iod, 0.03 * iod, ang, out=spots, weight=0.9)
+    for side in ("right", "left"):
+        c = face.eye_center(side) + y * 0.33 * iod + face.outward(side) * 0.2 * iod
+        tilt = ang + (-22.0 if side == "left" else 22.0)
+        gaussian_ellipse(shape, c, 0.11 * iod, 0.04 * iod, tilt, out=spots, weight=0.9)
+    gaussian_ellipse(shape, face.brow_mid - y * 0.36 * iod, 0.13 * iod, 0.05 * iod, ang, out=spots, weight=0.6)
+    gaussian_ellipse(shape, face.pt(152) - y * 0.17 * iod, 0.06 * iod, 0.03 * iod, ang, out=spots, weight=0.5)
+    gaussian_ellipse(shape, face.pt(0) - y * 0.035 * iod, 0.035 * iod, 0.014 * iod, ang, out=spots, weight=0.6)
+    # Shine needs light to reflect: spots stay faint on skin that is in shadow.
+    spots = np.clip(spots, 0.0, 1.0) ** 1.5 * skin * smoothstep(0.3, 0.75, lum)
+
+    shine = natural * (2.2 * amount) + spots * (0.2 * amount)
+    tint = np.array([1.0, 0.985, 0.97], np.float32)
+    out = ops.screen(img, np.clip(shine, 0.0, 0.6)[..., None] * tint)
+
+    # 3) glossy midtone contrast on skin
+    mid = float((lum * skin).sum() / max(float(skin.sum()), 1e-6))
+    out = out + ((out - mid) * (0.10 * amount)) * skin[..., None]
     return np.clip(out, 0.0, 1.0)
 
 

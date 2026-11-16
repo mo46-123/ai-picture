@@ -129,13 +129,14 @@ def _local(img: np.ndarray, face: Face, indices: list[int], pad: float, fn) -> n
 def _beautify_face(img: np.ndarray, face: Face, p: Params) -> np.ndarray:
     pr, m, iod = p.preset, p.makeup, face.iod
     regions = FaceRegions(img, face)
+    original = img
     img = skin.remove_spots(img, regions, p.smooth)
     img = skin.smooth(img, regions, p.smooth, pr.texture)
     img = skin.under_eye(img, face, regions, pr.dark_circles * p.cleanup)
     img = skin.soften_folds(img, face, regions, pr.folds * p.cleanup)
     img = skin.brighten(img, regions, p.whiten, pr.tone_a * p.tone_scale, pr.tone_b * p.tone_scale)
     img = skin.matte(img, regions, pr.matte * m)
-    img = skin.glass_glow(img, face, regions, pr.glow * m)
+    img = skin.glass_glow(img, face, regions, pr.glow * m, reference=original)
     img = makeup.blush(img, face, regions, pr.blush_rgb, pr.blush * m, pr.blush_height, pr.blush_spread)
 
     eyes = F.RIGHT_EYE + F.LEFT_EYE

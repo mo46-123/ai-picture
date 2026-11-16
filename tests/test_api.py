@@ -63,7 +63,7 @@ def test_upload_size_limit(settings, fake_analyzer):
 
 
 def test_ai_without_keys_falls_back_to_local(client, jpeg):
-    body = client.post("/api/ai", files={"image": ("a.jpg", jpeg, "image/jpeg")}, data={"style": "id_photo"}).json()
+    body = client.post("/api/ai", files={"image": ("a.jpg", jpeg, "image/jpeg")}, data={"style": "kdrama"}).json()
     assert body["fallback"] is True and body["provider"] is None and "API Key" in body["notice"]
 
 
