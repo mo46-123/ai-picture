@@ -147,6 +147,19 @@ class Face:
         return float(np.linalg.norm(self.pt(a) - self.pt(b)))
 
     @cached_property
+    def frontalness(self) -> float:
+        """1.0 for a face looking at the camera, falling to 0.0 for a profile.
+
+        Landmarks on the far side of a turned face are guesses, so makeup and
+        reshaping are faded out (a brow drawn on a profile lands on the temple).
+        """
+        # Frontal: the nose tip sits under the midpoint of the eyes. Turned: it slides
+        # sideways while the eyes move closer together in the image.
+        offset = abs(float(np.dot(self.pt(NOSE_TIP) - self.eye_mid, self.x_axis))) / self.iod
+        t = float(np.clip((offset - 0.28) / (0.55 - 0.28), 0.0, 1.0))
+        return 1.0 - t * t * (3.0 - 2.0 * t)
+
+    @cached_property
     def brow_mid(self) -> np.ndarray:
         return (self.pts(RIGHT_BROW).mean(axis=0) + self.pts(LEFT_BROW).mean(axis=0)) / 2.0
 

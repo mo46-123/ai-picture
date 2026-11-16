@@ -70,3 +70,23 @@ def test_wide_skin_mask_reaches_neck(regions):
     neck_point = (S.CX, S.CY + S.B + 40)
     assert at(regions.skin_wide, *neck_point) > at(regions.skin, *neck_point)
     assert len(F.NOSE_LOWER) == 16
+
+
+def test_frontal_face_is_frontal_and_turned_face_is_not(face):
+    assert face.frontalness == 1.0
+    turned = face.landmarks.copy()
+    turned[F.NOSE_TIP, 0] += 0.6 * face.iod          # nose far off the eye midpoint = profile
+    assert F.Face(turned).frontalness == 0.0
+
+
+def test_thin_lines_near_the_eyes_are_protected(img, face):
+    """A glasses frame must not be smoothed away as if it were a blemish."""
+    import cv2
+    from seoulglow.masks import FaceRegions
+    with_frame = img.copy()
+    y = int(S.EYE_Y + 34)
+    cv2.line(with_frame, (int(S.CX - 120), y), (int(S.CX + 120), y), (0.2, 0.2, 0.22), 2)
+    regions = FaceRegions(with_frame, face)
+    assert regions.fine_lines[y, int(S.CX - 100)] > 0.8
+    assert regions.skin[y, int(S.CX - 100)] < 0.2
+    assert FaceRegions(img, face).fine_lines[int(S.CY + 60), int(S.CX - 90)] < 0.05   # plain cheek

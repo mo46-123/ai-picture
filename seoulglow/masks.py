@@ -219,6 +219,23 @@ class FaceRegions:
         m = np.maximum.reduce([dilate(eyes, 0.01 * self.iod), dilate(brows, 0.045 * self.iod), self.lips_outer])
         return blur(m, 0.015 * self.iod)
 
+    @cached_property
+    def fine_lines(self) -> np.ndarray:
+        """Thin high-contrast structures around the eyes: glasses frames, stray hair.
+
+        Skin retouching would treat a thin frame as a blemish and erase it, so these
+        pixels are removed from the skin masks. Pores (contrast ~0.02) stay below the
+        threshold; dark circles are too broad to be picked up.
+        """
+        f, iod = self.face, self.iod
+        zone = np.zeros(self.shape, np.float32)
+        gaussian_ellipse(self.shape, f.eye_mid, 0.95 * iod, 0.42 * iod, f.angle_deg, out=zone)
+        zone = smoothstep(0.25, 0.5, zone)
+        lum = ops.luminance(self.img)
+        detail = np.abs(lum - ops.gaussian(lum, max(1.5, 0.03 * iod)))
+        lines = smoothstep(0.045, 0.09, detail) * zone
+        return np.clip(blur(dilate(lines, max(1.0, 0.012 * iod)), 0.01 * iod), 0.0, 1.0)
+
     # -- adaptive skin color model ------------------------------------------ #
     def _skin_samples(self) -> np.ndarray:
         f, iod = self.face, self.iod
@@ -277,6 +294,7 @@ class FaceRegions:
         """Tight skin mask (face + neck): used for smoothing, spots, glow and blush."""
         region = blur(np.maximum(self.face_poly, self.neck_poly), 0.04 * self.iod)
         mask = region * np.clip(self.skin_probability * 1.25, 0.0, 1.0) * (1.0 - self.features)
+        mask = mask * (1.0 - self.fine_lines)
         return np.clip(mask, 0.0, 1.0).astype(np.float32)
 
     @cached_property

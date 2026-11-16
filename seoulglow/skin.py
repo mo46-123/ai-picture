@@ -102,7 +102,7 @@ def under_eye(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) 
         top = pts + y * 0.035 * iod
         bottom = pts[::-1] + y * 0.27 * iod
         band = np.maximum(band, fill_poly(regions.shape, np.vstack([top, bottom])))
-    band = blur(band, 0.05 * iod) * (1.0 - regions.eyes) * regions.face_poly
+    band = blur(band, 0.05 * iod) * (1.0 - regions.eyes) * regions.face_poly * (1.0 - regions.fine_lines)
     lab = ops.to_lab(img)
     ref = _cheek_reference(lab, face, regions)
     if ref is None:

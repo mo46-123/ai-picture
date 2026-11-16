@@ -127,24 +127,27 @@ def _local(img: np.ndarray, face: Face, indices: list[int], pad: float, fn) -> n
 
 
 def _beautify_face(img: np.ndarray, face: Face, p: Params) -> np.ndarray:
-    pr, m, iod = p.preset, p.makeup, face.iod
+    pr, iod = p.preset, face.iod
+    m = p.makeup * face.frontalness   # no makeup on faces turned away from the camera
     regions = FaceRegions(img, face)
     original = img
     img = skin.remove_spots(img, regions, p.smooth)
     img = skin.smooth(img, regions, p.smooth, pr.texture)
-    img = skin.under_eye(img, face, regions, pr.dark_circles * p.cleanup)
-    img = skin.soften_folds(img, face, regions, pr.folds * p.cleanup)
+    img = skin.under_eye(img, face, regions, pr.dark_circles * p.cleanup * face.frontalness)
+    img = skin.soften_folds(img, face, regions, pr.folds * p.cleanup * face.frontalness)
     img = skin.brighten(img, regions, p.whiten, pr.tone_a * p.tone_scale, pr.tone_b * p.tone_scale)
     img = skin.matte(img, regions, pr.matte * m)
     img = skin.glass_glow(img, face, regions, pr.glow * m, reference=original)
-    img = makeup.blush(img, face, regions, pr.blush_rgb, pr.blush * m, pr.blush_height, pr.blush_spread)
+    img = makeup.blush(img, face, regions, pr.blush_rgb, pr.blush * m, pr.blush_height, pr.blush_spread,
+                       nose=pr.blush_nose)
 
     eyes = F.RIGHT_EYE + F.LEFT_EYE
     brows = F.RIGHT_BROW + F.LEFT_BROW
     img = _local(img, face, brows, 0.12 * iod, lambda s, f, r: makeup.brows(s, f, r, pr.brow_rgb, pr.brow * m))
     img = _local(img, face, eyes + brows, 0.15 * iod, lambda s, f, r: makeup.eyeshadow(
-        s, f, r, pr.shadow_rgb, pr.shadow * m))
-    img = _local(img, face, eyes, 0.12 * iod, lambda s, f, r: makeup.eyeliner(s, f, r, pr.liner * m))
+        s, f, r, pr.shadow_rgb, pr.shadow * m, outer=pr.shadow_outer))
+    img = _local(img, face, eyes, 0.12 * iod, lambda s, f, r: makeup.eyeliner(
+        s, f, r, pr.liner * m, tail=pr.liner_tail, drop=pr.liner_drop))
     if p.lip_rgb is not None:
         img = _local(img, face, F.LIPS_OUTER, 0.15 * iod, lambda s, f, r: makeup.lips(
             s, f, r, p.lip_rgb, pr.lip_intensity * m, pr.lip_gradient, pr.lip_gloss * m))
@@ -170,9 +173,10 @@ def process(rgb: np.ndarray, preset_id: str | None, adj: Adjustments | None,
         img[y0:y1, x0:x1] = _beautify_face(crop, face.shifted(-x0, -y0), p)
 
     for face in usable:  # geometry last, so makeup moves together with the face
-        img = reshape.slim_face(img, face, p.slim)
-        img = reshape.slim_nose(img, face, p.nose)
-        img = reshape.enlarge_eyes(img, face, p.eyes)
+        k = face.frontalness
+        img = reshape.slim_face(img, face, p.slim * k)
+        img = reshape.slim_nose(img, face, p.nose * k)
+        img = reshape.enlarge_eyes(img, face, p.eyes * k)
 
     img = color.apply_grade(img, p.preset.grade, p.filter)
     return to_uint8(img)

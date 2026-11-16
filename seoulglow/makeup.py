@@ -76,7 +76,7 @@ def _lip_gloss(img: np.ndarray, face: Face, regions: FaceRegions, amount: float)
 
 
 def blush(img: np.ndarray, face: Face, regions: FaceRegions, color: tuple[int, int, int],
-          intensity: float, height: float = 0.55, spread: float = 1.0) -> np.ndarray:
+          intensity: float, height: float = 0.55, spread: float = 1.0, nose: float = 0.0) -> np.ndarray:
     """Round, diffused blush on the apples of the cheeks (韩系苹果肌腮红).
 
     ``height`` places the blush between the eye line (0) and the nose tip (1);
@@ -90,6 +90,8 @@ def blush(img: np.ndarray, face: Face, regions: FaceRegions, color: tuple[int, i
         center = (face.eye_center(side) + face.y_axis * (height * face.eye_to_nose)
                   + face.outward(side) * 0.07 * iod)
         gaussian_ellipse(shape, center, 0.24 * iod * spread, 0.16 * iod * spread, face.angle_deg, out=weight)
+    if nose > 0.0:  # a touch on the nose tip (the Korean "flushed" look)
+        gaussian_ellipse(shape, face.pt(F.NOSE_TIP), 0.07 * iod, 0.055 * iod, face.angle_deg, out=weight, weight=0.7 * nose)
     weight = np.clip(weight, 0.0, 1.0) * regions.skin * float(np.clip(intensity, 0.0, 1.0))
 
     lab = ops.to_lab(img)
@@ -120,7 +122,7 @@ def brows(img: np.ndarray, face: Face, regions: FaceRegions, color: tuple[int, i
 
 
 def eyeshadow(img: np.ndarray, face: Face, regions: FaceRegions, color: tuple[int, int, int],
-              amount: float) -> np.ndarray:
+              amount: float, outer: float = 0.0) -> np.ndarray:
     """眼影: a soft wash on the upper lid, strongest at the lash line, with a small outer wing."""
     if amount <= 0.0:
         return img
@@ -143,10 +145,21 @@ def eyeshadow(img: np.ndarray, face: Face, regions: FaceRegions, color: tuple[in
     lab[..., 1] += (target[1] - lab[..., 1]) * weight * 0.42
     lab[..., 2] += (target[2] - lab[..., 2]) * weight * 0.42
     lab[..., 0] -= lab[..., 0] * 0.07 * weight
+    if outer > 0.0:  # deepen the outer third for a soft smoky corner
+        smoke = np.zeros(shape, np.float32)
+        for side, lid in (("right", F.RIGHT_UPPER_LID), ("left", F.LEFT_UPPER_LID)):
+            c = face.pt(lid[1]) + face.outward(side) * 0.02 * iod - y * 0.03 * iod
+            gaussian_ellipse(shape, c, 0.09 * iod, 0.05 * iod, face.angle_deg, out=smoke)
+        smoke = np.clip(smoke, 0.0, 1.0) * (1.0 - regions.eyes) * float(np.clip(amount * outer, 0.0, 1.0))
+        lab[..., 0] -= lab[..., 0] * 0.16 * smoke
+        lab[..., 1] += (target[1] - lab[..., 1]) * smoke * 0.3
+        lab[..., 2] += (target[2] - lab[..., 2]) * smoke * 0.3
+        weight = np.maximum(weight, smoke)
     return ops.from_lab_where(img, lab, weight)
 
 
-def eyeliner(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) -> np.ndarray:
+def eyeliner(img: np.ndarray, face: Face, regions: FaceRegions, amount: float,
+             tail: float = 0.045, drop: float = -0.018) -> np.ndarray:
     """内眼线: a fine dark line along the outer part of the upper lash line with a short tail."""
     if amount <= 0.0:
         return img
@@ -154,8 +167,9 @@ def eyeliner(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) -
     mask = np.zeros(shape, np.float32)
     for side, lid in (("right", F.RIGHT_UPPER_LID), ("left", F.LEFT_UPPER_LID)):
         pts = face.pts(lid)[:7] - y * 0.004 * iod        # outer three quarters of the lid
-        tail = pts[0] + face.outward(side) * 0.045 * iod - y * 0.018 * iod
-        mask = np.maximum(mask, polyline(shape, np.vstack([tail[None], pts]), thickness=max(1.0, 0.016 * iod)))
+        # drop > 0 pulls the tail down (soft "puppy" eye), drop < 0 lifts it (sharper, cooler)
+        end = pts[0] + face.outward(side) * tail * iod + y * drop * iod
+        mask = np.maximum(mask, polyline(shape, np.vstack([end[None], pts]), thickness=max(1.0, 0.016 * iod)))
     mask = blur(mask, max(0.5, 0.005 * iod)) * float(np.clip(amount, 0.0, 1.0))
     lab = ops.to_lab(img)
     lab[..., 0] -= np.clip(lab[..., 0] - 12.0, 0.0, None) * mask * 0.55
