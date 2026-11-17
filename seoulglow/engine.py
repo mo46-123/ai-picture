@@ -177,7 +177,7 @@ def _beautify_face(img: np.ndarray, face: Face, p: Params) -> np.ndarray:
     img = skin.glass_glow(img, face, regions, pr.glow * m, reference=original)
     img = skin.sculpt(img, face, regions, pr.sculpt * m)
     img = makeup.blush(img, face, regions, blush_c, pr.blush * m, pr.blush_height, pr.blush_spread,
-                       nose=pr.blush_nose)
+                       nose=pr.blush_nose, outward=pr.blush_out)
 
     eyes = F.RIGHT_EYE + F.LEFT_EYE
     brows = F.RIGHT_BROW + F.LEFT_BROW

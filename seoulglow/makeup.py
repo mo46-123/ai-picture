@@ -84,35 +84,39 @@ def _lip_gloss(img: np.ndarray, face: Face, regions: FaceRegions, amount: float)
 
 
 def blush(img: np.ndarray, face: Face, regions: FaceRegions, color: tuple[int, int, int],
-          intensity: float, height: float = 0.55, spread: float = 1.0, nose: float = 0.0) -> np.ndarray:
-    """Round, diffused blush on the apples of the cheeks (韩系苹果肌腮红).
+          intensity: float, height: float = 0.55, spread: float = 1.0, nose: float = 0.0,
+          outward: float = 0.07) -> np.ndarray:
+    """Round, diffused blush on the cheeks (韩系腮红).
 
     ``height`` places the blush between the eye line (0) and the nose tip (1);
-    K-drama "under-eye blush" sits higher (~0.45).
+    ``outward`` moves it from under the pupil toward the cheekbone. The Korean
+    "under-eye" blush sits high and wide: a soft cloud from below the outer half of
+    the eye out to the edge of the face, not a dot next to the nose.
     """
     if intensity <= 0.0:
         return img
     iod, shape = face.iod, regions.shape
+    lab = ops.to_lab(img)
+    target = _lab(color)
     weight = np.zeros(shape, np.float32)
     for side in ("right", "left"):
         center = (face.eye_center(side) + face.y_axis * (height * face.eye_to_nose)
-                  + face.outward(side) * 0.07 * iod)
-        gaussian_ellipse(shape, center, 0.24 * iod * spread, 0.16 * iod * spread, face.angle_deg, out=weight)
+                  + face.outward(side) * outward * iod)
+        one = gaussian_ellipse(shape, center, 0.26 * iod * spread, 0.17 * iod * spread, face.angle_deg)
+        one = np.clip(one, 0.0, 1.0) * regions.skin
+        # A cheek that is already flushed needs less; judged per cheek so both end up alike.
+        total = float(one.sum())
+        if total > 1.0:
+            cheek_a = float((lab[..., 1] * one).sum() / total)
+            one = one * float(np.clip((float(target[1]) - cheek_a) / 12.0, 0.45, 1.0))
+        weight = np.maximum(weight, one)
     if nose > 0.0:  # a touch on the nose tip (the Korean "flushed" look)
-        gaussian_ellipse(shape, face.pt(F.NOSE_TIP), 0.07 * iod, 0.055 * iod, face.angle_deg, out=weight, weight=0.7 * nose)
-    weight = np.clip(weight, 0.0, 1.0) * regions.skin * float(np.clip(intensity, 0.0, 1.0))
-
-    lab = ops.to_lab(img)
-    target = _lab(color)
-    # Cheeks that are already flushed (sun, natural redness) need far less blush.
-    total = float(weight.sum())
-    if total > 1.0:
-        cheek_a = float((lab[..., 1] * weight).sum() / total)
-        weight = weight * float(np.clip((float(target[1]) - cheek_a) / 14.0, 0.25, 1.0))
-    w = weight * 0.36  # a diffused flush; much stronger reads as a rash on real photos
+        tip = gaussian_ellipse(shape, face.pt(F.NOSE_TIP), 0.07 * iod, 0.055 * iod, face.angle_deg)
+        weight = np.maximum(weight, np.clip(tip, 0.0, 1.0) * regions.skin * 0.7 * nose)
+    w = weight * float(np.clip(intensity, 0.0, 1.0)) * 0.5
+    # Color only: real blush tints the skin, it does not darken it into a bruise.
     lab[..., 1] += (target[1] - lab[..., 1]) * w
     lab[..., 2] += (target[2] - lab[..., 2]) * w
-    lab[..., 0] += (target[0] - lab[..., 0]) * w * 0.15
     return ops.from_lab_where(img, lab, w)
 
 
