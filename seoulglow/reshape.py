@@ -102,7 +102,7 @@ def slim_face(img: np.ndarray, face: Face, strength: float) -> np.ndarray:
     if strength <= 0.0:
         return img
     iod, y = face.iod, face.y_axis
-    magnitude = 0.12 * iod * float(np.clip(strength, 0.0, 1.5))
+    magnitude = 0.15 * iod * float(np.clip(strength, 0.0, 1.5))
     chin_drop = max(float(np.dot(face.pt(F.CHIN) - face.eye_mid, y)), 0.5 * iod)
     center = face.eye_mid + y * 0.55 * chin_drop            # around the base of the nose
     oval = face.pts(F.FACE_OVAL)
@@ -167,6 +167,17 @@ def enlarge_eyes(img: np.ndarray, face: Face, strength: float) -> np.ndarray:
     for side in ("right", "left"):
         radius = 0.95 * face.eye_width(side)
         img = scale_warp(img, face.eye_center(side), radius, amount)
+    return img
+
+
+def enlarge_iris(img: np.ndarray, face: Face, strength: float) -> np.ndarray:
+    """眼瞳放大: magnify just the iris, like a larger-diameter contact lens."""
+    if strength <= 0.0 or face.landmarks.shape[0] < 478:
+        return img
+    for center, edge in ((468, 469), (473, 474)):
+        r = float(np.linalg.norm(face.pt(center) - face.pt(edge)))
+        if r >= 4.0:
+            img = scale_warp(img, face.pt(center), 1.9 * r, 0.17 * float(np.clip(strength, 0.0, 1.5)))
     return img
 
 

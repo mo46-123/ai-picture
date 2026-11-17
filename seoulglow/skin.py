@@ -224,6 +224,15 @@ def brighten(img: np.ndarray, regions: FaceRegions, amount: float,
         return img
     mask = regions.skin_wide
     lab = ops.to_lab(img)
+    # The skin mask stops short of the brows. Left alone, the skin between and around
+    # the brow hairs keeps the photo's old color and shows as a yellow-brown patch on
+    # the newly fair face, so everything there that is not dark hair is toned as well.
+    face = regions.face
+    brow = np.maximum(fill_poly(regions.shape, face.pts(F.RIGHT_BROW)), fill_poly(regions.shape, face.pts(F.LEFT_BROW)))
+    brow = blur(cv2.dilate(brow, np.ones((3, 3), np.uint8), iterations=max(1, int(0.05 * face.iod))), 0.03 * face.iod)
+    total = float(regions.skin.sum())
+    skin_l = float((lab[..., 0] * regions.skin).sum() / total) if total > 1.0 else 60.0
+    mask = np.maximum(mask, brow * regions.face_poly * smoothstep(skin_l - 34.0, skin_l - 16.0, lab[..., 0]))
     lightness = lab[..., 0] / 100.0
     if amount > 0.0:
         # Gentle on purpose: real Korean retouching brightens skin a few L* units,
@@ -274,7 +283,7 @@ def glass_glow(img: np.ndarray, face: Face, regions: FaceRegions, amount: float,
     # Shine needs light to reflect: spots stay faint on skin that is in shadow.
     spots = np.clip(spots, 0.0, 1.0) ** 1.5 * skin * smoothstep(0.3, 0.75, lum)
 
-    shine = natural * (2.2 * amount) + spots * (0.2 * amount)
+    shine = natural * (2.2 * amount) + spots * (0.3 * amount)
     tint = np.array([1.0, 0.985, 0.97], np.float32)
     out = ops.screen(img, np.clip(shine, 0.0, 0.6)[..., None] * tint)
 
@@ -282,6 +291,39 @@ def glass_glow(img: np.ndarray, face: Face, regions: FaceRegions, amount: float,
     mid = float((lum * skin).sum() / max(float(skin.sum()), 1e-6))
     out = out + ((out - mid) * (0.10 * amount)) * skin[..., None]
     return np.clip(out, 0.0, 1.0)
+
+
+def sculpt(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) -> np.ndarray:
+    """修容高光: broad soft light on the center of the face (forehead, nose bridge, under
+    the eyes, chin) and a little shade along the jaw and the sides of the nose, so
+    the face reads as smaller and more three-dimensional."""
+    if amount <= 0.0:
+        return img
+    iod, shape, ang, y = face.iod, regions.shape, face.angle_deg, face.y_axis
+    light = np.zeros(shape, np.float32)
+    shade = np.zeros(shape, np.float32)
+    bridge = (face.pt(6) + face.pt(195)) / 2.0
+    gaussian_ellipse(shape, bridge, 0.045 * iod, 0.22 * iod, ang, out=light, weight=1.0)
+    gaussian_ellipse(shape, face.brow_mid - y * 0.3 * iod, 0.22 * iod, 0.14 * iod, ang, out=light, weight=0.7)
+    gaussian_ellipse(shape, face.pt(152) - y * 0.16 * iod, 0.1 * iod, 0.07 * iod, ang, out=light, weight=0.7)
+    for side in ("right", "left"):
+        out = face.outward(side)
+        c = face.eye_center(side) + y * 0.36 * iod + out * 0.08 * iod      # under-eye triangle
+        gaussian_ellipse(shape, c, 0.2 * iod, 0.12 * iod, ang, out=light, weight=0.9)
+        gaussian_ellipse(shape, bridge + y * 0.08 * iod + out * 0.115 * iod, 0.03 * iod, 0.17 * iod, ang,
+                         out=shade, weight=0.7)
+    for index in (172, 397, 136, 365):                                     # along the jaw
+        jaw = face.pt(index)
+        inward = face.pt(F.NOSE_TIP) - jaw
+        jaw = jaw + inward / max(float(np.linalg.norm(inward)), 1e-6) * 0.06 * iod
+        gaussian_ellipse(shape, jaw, 0.13 * iod, 0.13 * iod, ang, out=shade, weight=0.8)
+    skin = regions.skin
+    light = np.clip(light, 0.0, 1.0) * skin
+    shade = np.clip(shade, 0.0, 1.0) * skin * (1.0 - light)
+    lab = ops.to_lab(img)
+    lightness = lab[..., 0]
+    lab[..., 0] = lightness + ((100.0 - lightness) * 0.2 * light - lightness * 0.07 * shade) * amount
+    return ops.from_lab_where(img, lab, np.maximum(light, shade))
 
 
 def matte(img: np.ndarray, regions: FaceRegions, amount: float) -> np.ndarray:

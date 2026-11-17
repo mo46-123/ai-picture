@@ -175,6 +175,7 @@ def _beautify_face(img: np.ndarray, face: Face, p: Params) -> np.ndarray:
     lip_c = _adapt(p.lip_rgb, light) if p.lip_rgb is not None else None
     img = skin.matte(img, regions, pr.matte * m)
     img = skin.glass_glow(img, face, regions, pr.glow * m, reference=original)
+    img = skin.sculpt(img, face, regions, pr.sculpt * m)
     img = makeup.blush(img, face, regions, blush_c, pr.blush * m, pr.blush_height, pr.blush_spread,
                        nose=pr.blush_nose)
 
@@ -192,6 +193,7 @@ def _beautify_face(img: np.ndarray, face: Face, p: Params) -> np.ndarray:
             s, f, r, lip_c, pr.lip_intensity * m, pr.lip_gradient, pr.lip_gloss * m))
     img = _local(img, face, eyes, 0.35 * iod, lambda s, f, r: makeup.aegyo_sal(s, f, r, pr.aegyo * m))
     img = _local(img, face, eyes, 0.08 * iod, lambda s, f, r: makeup.brighten_eyes(s, r, pr.eye_brighten * m, face=f))
+    img = _local(img, face, eyes, 0.08 * iod, lambda s, f, r: makeup.iris_lens(s, f, r, pr.lens * m))
     img = _local(img, face, F.LIPS_INNER, 0.06 * iod, lambda s, f, r: makeup.whiten_teeth(
         s, f, r, pr.teeth * min(1.0, m + 0.3)))
     return img
@@ -229,6 +231,7 @@ def process(rgb: np.ndarray, preset_id: str | None, adj: Adjustments | None,
         img = reshape.slim_face(img, face, p.slim * k)
         img = reshape.slim_nose(img, face, p.nose * k)
         img = reshape.enlarge_eyes(img, face, p.eyes * k)
+        img = reshape.enlarge_iris(img, face, p.eyes * k)
         img = reshape.plump_lips(img, face, p.preset.lip_plump * min(1.0, p.makeup / max(p.preset.default_makeup, 1e-6)) * k)
 
     img = color.apply_grade(img, p.preset.grade, p.filter)

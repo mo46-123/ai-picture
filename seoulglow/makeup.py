@@ -40,13 +40,13 @@ def lips(img: np.ndarray, face: Face, regions: FaceRegions, color: tuple[int, in
     # A tint, not paint. Real lipstick is darker and less saturated where the lip is in
     # shadow, so the target chroma follows each pixel's own lightness.
     shade = np.clip(lightness / max(float(target[0]), 1.0), 0.4, 1.1) ** 1.5   # dark lips take less color
-    lab[..., 1] += (target[1] * shade - lab[..., 1]) * weight * 0.72
-    lab[..., 2] += (target[2] * shade - lab[..., 2]) * weight * 0.72
+    lab[..., 1] += (target[1] * shade - lab[..., 1]) * weight * 0.82
+    lab[..., 2] += (target[2] * shade - lab[..., 2]) * weight * 0.82
     # Never lighten: lifting lip lightness toward a pale shade makes lips look chalky white.
     # Darken toward the shade freely, but lighten only lips that are much darker than it
     # (lips in shadow) and never by much: lifting normal lips makes them chalky.
     gap = float(target[0]) - mean_l
-    lab[..., 0] += (gap * 0.3 if gap < 0.0 else min(max(gap - 8.0, 0.0) * 0.6, 13.0)) * weight
+    lab[..., 0] += (gap * 0.3 if gap < 0.0 else min(max(gap - 6.0, 0.0) * 0.7, 14.0)) * weight
     out = ops.from_lab_where(img, lab, weight)
 
     if gloss > 0.0:
@@ -109,7 +109,7 @@ def blush(img: np.ndarray, face: Face, regions: FaceRegions, color: tuple[int, i
     if total > 1.0:
         cheek_a = float((lab[..., 1] * weight).sum() / total)
         weight = weight * float(np.clip((float(target[1]) - cheek_a) / 14.0, 0.25, 1.0))
-    w = weight * 0.38  # a diffused flush; much stronger reads as a rash on real photos
+    w = weight * 0.46  # a diffused flush; much stronger reads as a rash on real photos
     lab[..., 1] += (target[1] - lab[..., 1]) * w
     lab[..., 2] += (target[2] - lab[..., 2]) * w
     lab[..., 0] += (target[0] - lab[..., 0]) * w * 0.15
@@ -124,7 +124,7 @@ def brows(img: np.ndarray, face: Face, regions: FaceRegions, color: tuple[int, i
     iod = face.iod
     mask = np.maximum(fill_poly(regions.shape, face.pts(F.RIGHT_BROW)),
                       fill_poly(regions.shape, face.pts(F.LEFT_BROW)))
-    mask = blur(dilate(mask, 0.012 * iod), 0.018 * iod) * float(np.clip(amount, 0.0, 1.0))
+    mask = blur(dilate(mask, 0.004 * iod), 0.016 * iod) * float(np.clip(amount, 0.0, 1.0))
     # shape > 0: straight "一字眉" — fill the hollow under the arch so the lower edge is flat.
     # shape < 0: a slightly lifted, longer tail for a cooler, more defined brow.
     extra = np.zeros(regions.shape, np.float32)
@@ -141,6 +141,10 @@ def brows(img: np.ndarray, face: Face, regions: FaceRegions, color: tuple[int, i
     lab = ops.to_lab(img)
     target = _lab(color)
     lightness = lab[..., 0]
+    # Reinforce the brow hair that is there; bare skin (or a fringe covering the brow)
+    # gets only a faint fill, otherwise the brow looks drawn on with a marker.
+    skin_l = float((lightness * regions.skin).sum() / max(float(regions.skin.sum()), 1e-6))
+    mask = mask * (0.15 + 0.85 * smoothstep(4.0, 18.0, skin_l - ops.gaussian(lightness, 0.012 * iod)))
     lab[..., 0] = lightness - np.clip(lightness - target[0], 0.0, None) * mask * 0.45
     lab[..., 1] += (target[1] - lab[..., 1]) * mask * 0.35
     lab[..., 2] += (target[2] - lab[..., 2]) * mask * 0.35
@@ -219,9 +223,16 @@ def lashes(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) -> 
             for t in (0.0, 0.5):
                 base = pts[i] * (1 - t) + pts[i + 1] * t
                 lean = max(0.0, 1.0 - (i + t) / 4.0)     # outer lashes sweep outward
-                tip = base + (up * (0.045 - 0.008 * (i + t) / 5.0) + out * 0.03 * lean) * iod
+                tip = base + (up * (0.062 - 0.012 * (i + t) / 5.0) + out * 0.04 * lean) * iod
                 cv2.line(canvas, tuple(np.round(base * 4).astype(int)), tuple(np.round(tip * 4).astype(int)),
                          255, 1, cv2.LINE_AA, shift=2)
+        low = face.pts(F.RIGHT_EYE_LOWER_LID if side == "right" else F.LEFT_EYE_LOWER_LID)
+        ordered = low if np.linalg.norm(low[0] - pts[0]) < np.linalg.norm(low[-1] - pts[0]) else low[::-1]
+        for i in range(min(4, len(ordered) - 1)):        # a few short lower lashes at the outer half
+            base = (ordered[i] + ordered[i + 1]) / 2.0
+            tip = base + (-up * 0.022 + out * 0.012) * iod
+            cv2.line(canvas, tuple(np.round(base * 4).astype(int)), tuple(np.round(tip * 4).astype(int)),
+                     150, 1, cv2.LINE_AA, shift=2)
     mask = canvas.astype(np.float32) / 255.0 * float(np.clip(amount, 0.0, 1.0))
     lab = ops.to_lab(img)
     lab[..., 0] -= np.clip(lab[..., 0] - 10.0, 0.0, None) * mask * 0.7
@@ -247,7 +258,7 @@ def aegyo_sal(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) 
     band = blur(band, 0.022 * iod) * keep
     crease = blur(crease, 0.02 * iod) * keep * (1.0 - band)
     lab = ops.to_lab(img)
-    lab[..., 0] += (6.5 * band - 2.5 * crease) * amount
+    lab[..., 0] += (8.0 * band - 3.5 * crease) * amount
     lab[..., 2] += 1.0 * band * amount
     return ops.from_lab_where(img, lab, band + crease)
 
@@ -302,3 +313,40 @@ def whiten_teeth(img: np.ndarray, face: Face, regions: FaceRegions, amount: floa
     lab[..., 1] *= 1.0 - 0.3 * teeth
     lab[..., 0] += 7.0 * teeth
     return ops.from_lab_where(img, lab, teeth)
+
+
+def iris_lens(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) -> np.ndarray:
+    """美瞳: a lighter, slightly grey iris with a dark outer ring and bigger catchlights."""
+    if amount <= 0.0 or face.landmarks.shape[0] < 478:
+        return img
+    shape = regions.shape
+    ys, xs = np.mgrid[0:shape[0], 0:shape[1]].astype(np.float32)
+    iris = np.zeros(shape, np.float32)
+    ring = np.zeros(shape, np.float32)
+    pupil = np.zeros(shape, np.float32)
+    spark = np.zeros(shape, np.float32)
+    for center, edge in ((468, 469), (473, 474)):
+        c = face.pt(center)
+        r = float(np.linalg.norm(c - face.pt(edge)))
+        if r < 5.0:
+            continue
+        d = np.sqrt((xs - c[0]) ** 2 + (ys - c[1]) ** 2) / r
+        # the band between pupil and rim is what a colored lens changes
+        pupil = np.maximum(pupil, 1.0 - smoothstep(0.26, 0.42, d))
+        iris = np.maximum(iris, smoothstep(0.38, 0.6, d) * (1.0 - smoothstep(0.82, 1.0, d)))
+        ring = np.maximum(ring, smoothstep(0.82, 0.96, d) * (1.0 - smoothstep(1.0, 1.12, d)))
+        gaussian_ellipse(shape, c + np.array([-0.32, -0.36]) * r, 0.17 * r, 0.17 * r, out=spark)
+        gaussian_ellipse(shape, c + np.array([0.36, 0.34]) * r, 0.09 * r, 0.09 * r, out=spark, weight=0.5)
+    eye = regions.eyes
+    k = float(np.clip(amount, 0.0, 1.0))
+    iris, ring = iris * eye * k, np.maximum(ring, pupil * 0.8) * eye * k    # rim and pupil stay deep
+    lab = ops.to_lab(img)
+    lightness = lab[..., 0]
+    # dark irises are lifted toward a mid grey; an iris that is already light is left alone
+    lab[..., 0] = lightness + np.clip(44.0 - lightness, -16.0, 22.0) * iris * 0.6 - np.clip(lightness - 14.0, 0.0, None) * ring * 0.6
+    lab[..., 1] += (-1.0 - lab[..., 1]) * iris * 0.45      # toward a cool grey
+    lab[..., 2] += (-9.0 - lab[..., 2]) * iris * 0.45
+    weight = np.maximum(iris, ring)
+    out = ops.from_lab_where(img, lab, weight)
+    spark = np.clip(spark, 0.0, 1.0) * eye * (0.6 * k)
+    return np.clip(ops.screen(out, spark[..., None] * np.ones(3, np.float32)), 0.0, 1.0)
