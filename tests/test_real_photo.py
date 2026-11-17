@@ -48,3 +48,32 @@ def test_retouch_changes_the_face_not_the_background(analyzer, photo):
     inside = diff[y0:y1, x0:x1].mean()
     corner = diff[:40, :40].mean()
     assert inside > 4 and corner < 1
+
+
+def _darken(rgb: np.ndarray, ev: float) -> np.ndarray:
+    """The same photo taken in a dark room: less light, warmer lamp."""
+    x = rgb.astype(np.float32) / 255.0
+    lin = np.where(x <= 0.04045, x / 12.92, ((x + 0.055) / 1.055) ** 2.4) * (2.0 ** ev) * np.array([1.2, 1.0, 0.75])
+    out = np.where(lin <= 0.0031308, lin * 12.92, 1.055 * np.clip(lin, 0, 1) ** (1 / 2.4) - 0.055)
+    return (np.clip(out, 0, 1) * 255 + 0.5).astype(np.uint8)
+
+
+def test_dark_photo_is_brightened_as_a_whole_not_just_the_face(analyzer, photo):
+    from seoulglow.engine import _face_lightness, _lift_dark_scene
+
+    faces = analyzer.detect(photo)
+    lifted, dark_scene = _lift_dark_scene(photo.astype(np.float32) / 255.0, faces, 1.0)
+    assert dark_scene == 0.0 and np.array_equal(lifted, photo.astype(np.float32) / 255.0)  # normal light: untouched
+
+    dark = _darken(photo, -2.2)
+    dark_faces = analyzer.detect(dark)
+    assert dark_faces
+    img = dark.astype(np.float32) / 255.0
+    lifted, dark_scene = _lift_dark_scene(img, dark_faces, 1.0)
+    assert dark_scene > 0.5
+    assert _face_lightness(lifted, dark_faces[0]) > _face_lightness(img, dark_faces[0]) + 8.0
+    corner = (slice(0, 40), slice(0, 40))      # the background is brightened too
+    assert lifted[corner].mean() > img[corner].mean() * 1.3
+
+    out = process(dark, "glass_skin", Adjustments(), dark_faces)
+    assert out.shape == dark.shape and out.dtype == np.uint8
