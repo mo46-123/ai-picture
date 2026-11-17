@@ -77,3 +77,19 @@ def test_dark_photo_is_brightened_as_a_whole_not_just_the_face(analyzer, photo):
 
     out = process(dark, "glass_skin", Adjustments(), dark_faces)
     assert out.shape == dark.shape and out.dtype == np.uint8
+
+
+def test_rounder_faces_get_more_slimming_than_oval_ones(analyzer, photo):
+    from seoulglow import reshape
+
+    face = analyzer.detect(photo)[0]
+    center = face.pt(F.NOSE_TIP)
+
+    def widened(factor):
+        pts = face.landmarks.copy()
+        pts[:, 0] = center[0] + (pts[:, 0] - center[0]) * factor
+        return F.Face(pts)
+
+    narrow, normal, wide = (reshape.needs(widened(k))[0] for k in (0.85, 1.0, 1.2))
+    assert 0.35 <= narrow <= normal <= wide <= 1.0
+    assert wide > narrow + 0.2

@@ -283,6 +283,20 @@ def _beautify_face(img: np.ndarray, face: Face, p: Params) -> np.ndarray:
     return img
 
 
+def _adaptive(value: float, default: float, need: float) -> float:
+    """Slider position → reshaping strength, adapted to the face.
+
+    At the preset's default position the strength is what this face needs (a face
+    that already has the shape gets a light touch); moving the slider further still
+    reaches the full effect at 100%, and below the default it scales down to zero.
+    """
+    d = max(default, 1e-6)
+    base = d * need
+    if value <= d:
+        return value / d * base
+    return base + (1.0 - base) * (value - d) / max(1.0 - d, 1e-6)
+
+
 def process(rgb: np.ndarray, preset_id: str | None, adj: Adjustments | None,
             faces: list[Face]) -> np.ndarray:
     """Run the full pipeline on an RGB uint8 image with pre-detected faces."""
@@ -312,12 +326,15 @@ def process(rgb: np.ndarray, preset_id: str | None, adj: Adjustments | None,
         else:
             img[y0:y1, x0:x1] = _beautify_face(crop, local, p)
 
+    pr = p.preset
     for face in usable:  # geometry last, so makeup moves together with the face
         k = face.frontalness
-        img = reshape.slim_face(img, face, p.slim * k)
-        img = reshape.slim_nose(img, face, p.nose * k)
-        img = reshape.enlarge_eyes(img, face, p.eyes * k)
-        img = reshape.enlarge_iris(img, face, p.eyes * k)
+        need_slim, need_nose, need_eyes = reshape.needs(face)   # a face that already has the shape gets 精修
+        eyes = _adaptive(p.eyes, pr.eyes, need_eyes) * k
+        img = reshape.slim_face(img, face, _adaptive(p.slim, pr.slim, need_slim) * k)
+        img = reshape.slim_nose(img, face, _adaptive(p.nose, pr.nose, need_nose) * k)
+        img = reshape.enlarge_eyes(img, face, eyes)
+        img = reshape.enlarge_iris(img, face, eyes)
         img = reshape.plump_lips(img, face, p.preset.lip_plump * min(1.0, p.makeup / max(p.preset.default_makeup, 1e-6)) * k)
 
     grade = p.preset.grade

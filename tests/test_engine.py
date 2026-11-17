@@ -90,3 +90,13 @@ def test_decode_flattens_transparency_onto_white():
     buf = io.BytesIO()
     Image.new("RGBA", (64, 64), (0, 0, 0, 0)).save(buf, "PNG")
     assert decode_image(buf.getvalue()).min() == 255
+
+
+def test_reshape_slider_is_adaptive_at_default_and_full_at_max():
+    from seoulglow.engine import _adaptive
+
+    assert _adaptive(0.0, 0.7, 0.4) == 0.0
+    assert abs(_adaptive(0.7, 0.7, 0.4) - 0.28) < 1e-9        # default position: what the face needs
+    assert abs(_adaptive(1.0, 0.7, 0.4) - 1.0) < 1e-9         # 100%: the full effect is still reachable
+    values = [_adaptive(v / 20, 0.7, 0.4) for v in range(21)]
+    assert all(b >= a for a, b in zip(values, values[1:]))     # never goes backwards

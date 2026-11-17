@@ -27,6 +27,36 @@ def _roi(shape, cx: float, cy: float, radius: float):
     return x0, y0, x1, y1
 
 
+def needs(face: Face) -> tuple[float, float, float]:
+    """How much this face actually needs 瘦脸, 瘦鼻 and 大眼, each from 0.35 to 1.
+
+    The same amount of slimming that flatters a round face pinches a face that is
+    already oval, and enlarging eyes that are already big makes them stare. So the
+    slider strength is scaled by the face's own proportions: the wider and rounder
+    the face, the wider the nose wings, the smaller the eyes, the more is done; a
+    face that already has the shape gets only a light touch (精修).
+    """
+    x, y, iod = face.x_axis, face.y_axis, face.iod
+
+    def span(a: int, b: int) -> float:
+        return abs(float(np.dot(face.pt(a) - face.pt(b), x)))
+
+    cheek = max(span(234, 454), 1e-6)
+    length = max(abs(float(np.dot(face.pt(F.CHIN) - face.pt(10), y))), 1e-6)
+    roundness = _ramp(cheek / length, 0.78, 0.90)              # width vs length: oval ~0.78, round ~0.9
+    square = 0.6 * _ramp(span(172, 397) / cheek, 0.80, 0.88)   # jaw angles vs cheekbones
+    slim = 0.35 + 0.65 * max(roundness, square)
+    nose = 0.35 + 0.65 * _ramp(span(64, 294) / iod, 0.54, 0.66)
+    opening = (float(np.linalg.norm(face.pt(159) - face.pt(145))) + float(np.linalg.norm(face.pt(386) - face.pt(374)))) / (2.0 * iod)
+    eyes = 0.35 + 0.65 * (1.0 - _ramp(opening, 0.12, 0.19))
+    return slim, nose, eyes
+
+
+def _ramp(v: float, lo: float, hi: float) -> float:
+    t = float(np.clip((v - lo) / (hi - lo), 0.0, 1.0))
+    return t * t * (3.0 - 2.0 * t)
+
+
 def scale_warp(img: np.ndarray, center: np.ndarray, radius: float, strength: float) -> np.ndarray:
     """Magnify the content near ``center`` (strength 0 → none, ~0.3 → strong)."""
     if radius < 2 or strength <= 0.0:
