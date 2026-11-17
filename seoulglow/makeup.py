@@ -212,7 +212,7 @@ def eyeliner(img: np.ndarray, face: Face, regions: FaceRegions, amount: float,
     iod, y, shape = face.iod, face.y_axis, regions.shape
     mask = np.zeros(shape, np.float32)
     for side, lid in (("right", F.RIGHT_UPPER_LID), ("left", F.LEFT_UPPER_LID)):
-        pts = face.pts(lid) - y * 0.004 * iod             # the whole lash line
+        pts = face.pts(lid)[:-1] - y * 0.004 * iod        # the lash line, stopping short of the inner corner
         # drop > 0 pulls the tail down (soft "puppy" eye), drop < 0 lifts it (sharper, cooler)
         along = pts[0] - pts[2]                       # the lid's own direction at the outer corner
         along = along / max(float(np.linalg.norm(along)), 1e-6)
@@ -363,8 +363,9 @@ def iris_lens(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) 
         rim = np.maximum(rim, smoothstep(0.7, 0.92, d) * (1.0 - smoothstep(1.0, 1.2, d)))
         inside = (1.0 - smoothstep(0.9, 1.05, d)) * eye
         disk = np.maximum(disk, inside)
-        # does the photo already have a reflection in this eye?
-        vals = lightness[inside > 0.5]
+        # does the photo already have a reflection in this eye? (looked for well inside
+        # the iris: near its edge a bright pixel is usually just the white of the eye)
+        vals = lightness[(d < 0.8) & (eye > 0.5)]
         if vals.size and float(np.percentile(vals, 99)) < float(np.median(vals)) + 25.0:
             gaussian_ellipse(shape, c + np.array([-0.3, -0.34]) * r, 0.13 * r, 0.13 * r, out=spark)
     if not radii:
@@ -376,7 +377,7 @@ def iris_lens(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) 
     # reflections: calmed a little, and kept out of the iris lift below
     body = float(np.median(lightness[disk > 0.3 * k])) if np.any(disk > 0.3 * k) else 30.0
     spec = smoothstep(body + 14.0, body + 28.0, lightness)
-    lightness = lightness - np.clip(lightness - 62.0, 0.0, None) * disk * 0.55
+    lightness = lightness - np.clip(lightness - 62.0, 0.0, None) * disk * 0.85
     # an even move toward a mid grey-blue: dark irises are lifted, very light ones
     # (grey lenses) are deepened a little; a bit stronger at the rim so it doesn't stay dark
     lift = np.clip(40.0 - lightness, -18.0, 26.0) * (iris * 0.8 + rim * 0.3) * (1.0 - spec)
