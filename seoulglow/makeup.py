@@ -327,7 +327,8 @@ def whiten_teeth(img: np.ndarray, face: Face, regions: FaceRegions, amount: floa
     return ops.from_lab_where(img, lab, teeth)
 
 
-def iris_lens(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) -> np.ndarray:
+def iris_lens(img: np.ndarray, face: Face, regions: FaceRegions, amount: float,
+              skin_l: float = 80.0) -> np.ndarray:
     """美瞳: a soft grey-blue iris.
 
     Real tinted lenses look gentle because the whole iris is lifted evenly up to a
@@ -380,13 +381,18 @@ def iris_lens(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) 
     lightness = lightness - np.clip(lightness - 62.0, 0.0, None) * disk * 0.85
     # an even move toward a mid grey-blue: dark irises are lifted, very light ones
     # (grey lenses) are deepened a little; a bit stronger at the rim so it doesn't stay dark
-    lift = np.clip(40.0 - lightness, -18.0, 26.0) * (iris * 0.8 + rim * 0.3) * (1.0 - spec)
+    # How light a tinted iris may be depends on the light in the photo: a fixed level
+    # glows unnaturally in a dim photo. Set to half the skin's lightness
+    # here; the color grade that follows deepens it to about a third.
+    level = float(np.clip(0.5 * skin_l, 16.0, 38.0))
+    lift = np.clip(level - lightness, -18.0, 26.0) * (iris * 0.8 + rim * 0.3) * (1.0 - spec)
     lightness = lightness + lift
     lightness = lightness - np.clip(lightness - 12.0, 0.0, None) * pupil * 0.3 * (1.0 - spec)   # the pupil stays
     lab[..., 0] = lightness
     tint = np.maximum(iris, rim * 0.6)
-    lab[..., 1] += (-2.0 - lab[..., 1]) * tint * 0.45      # a cool grey-blue
-    lab[..., 2] += (-11.0 - lab[..., 2]) * tint * 0.55
+    depth = level / 33.0                                   # dim light carries less color
+    lab[..., 1] += (-2.0 * depth - lab[..., 1]) * tint * 0.45      # a cool grey-blue
+    lab[..., 2] += (-11.0 * depth - lab[..., 2]) * tint * 0.55
     out = ops.from_lab_where(img, lab, np.maximum.reduce([iris, rim, pupil, disk]))
     spark = np.clip(spark, 0.0, 1.0) * eye * (0.35 * k)
     return np.clip(ops.screen(out, spark[..., None] * np.ones(3, np.float32)), 0.0, 1.0)

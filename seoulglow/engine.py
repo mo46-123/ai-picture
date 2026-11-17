@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Mapping
 
 import cv2
@@ -14,7 +14,7 @@ from . import face as F
 from .config import Settings, get_settings
 from .face import Face, get_analyzer
 from .imageio import decode_image, encode_jpeg, to_float, to_uint8
-from .masks import FaceRegions, gaussian_ellipse, smoothstep
+from .masks import FaceRegions, blur, dilate, fill_poly, gaussian_ellipse, smoothstep
 from .presets import LIP_SHADES, Preset, get_preset
 
 WORK_IOD = 200.0   # faces larger than this (eye distance, px) are retouched at reduced size
@@ -83,6 +83,7 @@ class Params:
     filter: float
     cleanup: float          # dark circles / folds follow the 磨皮 slider
     lip_rgb: tuple[int, int, int] | None
+    dark_scene: float = 0.0  # 0 = normal light, 1 = photo taken in a dark room (set by process)
 
 
 def resolve(preset: Preset, adj: Adjustments) -> Params:
@@ -155,6 +156,72 @@ def _adapt(rgb: tuple[int, int, int], light: np.ndarray) -> np.ndarray:
                      base[1] + (target[2] - NOMINAL_SKIN[2]) * k], np.float32)
 
 
+DIM_FACE_L = 56.0     # faces darker than this (L*) are underexposed
+LIFT_TARGET_L = 58.0  # the whole-photo lift brings the face up to about here; relight does the rest
+MAX_LIFT = 2.4        # at most ~1.3 EV
+
+
+def _to_linear(x: np.ndarray) -> np.ndarray:
+    return np.where(x <= 0.04045, x / 12.92, ((x + 0.055) / 1.055) ** 2.4).astype(np.float32)
+
+
+def _to_srgb(x: np.ndarray) -> np.ndarray:
+    x = np.clip(x, 0.0, 1.0)
+    return np.where(x <= 0.0031308, x * 12.92, 1.055 * x ** (1.0 / 2.4) - 0.055).astype(np.float32)
+
+
+def _face_lightness(img: np.ndarray, face: Face) -> float:
+    """Typical L* of a face's skin, sampled on the cheekbones and the forehead."""
+    x0, y0, x1, y1 = face.roi(img.shape, margin=0.05)
+    if x1 - x0 < 8 or y1 - y0 < 8:
+        return float(NOMINAL_SKIN[0])
+    lightness = ops.to_lab(np.ascontiguousarray(img[y0:y1, x0:x1]))[..., 0]
+    f = face.shifted(-x0, -y0)
+    weight = np.zeros(lightness.shape, np.float32)
+    for side in ("right", "left"):
+        c, sx, sy, a = skin.cheekbone_patch(f, side)
+        gaussian_ellipse(lightness.shape, c, sx, sy, a, out=weight)
+    gaussian_ellipse(lightness.shape, f.brow_mid - f.y_axis * 0.3 * f.iod, 0.15 * f.iod, 0.07 * f.iod,
+                     f.angle_deg, out=weight)
+    sample = lightness[weight > 0.5]
+    return float(np.median(sample)) if sample.size > 20 else float(np.median(lightness))
+
+
+def _lift_dark_scene(img: np.ndarray, faces: list[Face], strength: float) -> tuple[np.ndarray, float]:
+    """补光 for photos taken in the dark.
+
+    A retoucher brightens a dark photo as a whole and then fine-tunes the face. Lifting
+    only the face leaves a bright oval floating in a dark picture, which reads as a
+    mask. So when the face and the scene are both dark, most of the lift goes to the
+    whole photo, in linear light like a longer exposure (blacks stay black, highlights
+    roll off softly); the face relight only finishes the job. A backlit face in a
+    bright scene is left to the local relight.
+
+    Returns the image and how dark the scene is (0 = normal light, 1 = a dark room).
+    """
+    if not faces or strength <= 0.0:
+        return img, 0.0
+    face_l = _face_lightness(img, max(faces, key=lambda f: f.iod))
+    if face_l >= DIM_FACE_L:
+        return img, 0.0
+    h, w = img.shape[:2]
+    small = cv2.resize(img, (256, max(1, round(256 * h / w))), interpolation=cv2.INTER_AREA)
+    bright = float(np.percentile(ops.to_lab(small)[..., 0], 95))
+    share = 1.0 - float(smoothstep(60.0, 80.0, np.float32(bright)))
+    dark_scene = (1.0 - float(smoothstep(40.0, DIM_FACE_L, np.float32(face_l)))) * share
+
+    def lum(l: float) -> float:
+        return ((l + 16.0) / 116.0) ** 3
+
+    gain = min(MAX_LIFT, (lum(LIFT_TARGET_L) / lum(face_l)) ** (share * float(np.clip(strength, 0.0, 1.0))))
+    if gain < 1.03:
+        return img, dark_scene
+    lin = _to_linear(img) * gain
+    knee = 0.7                                   # soft shoulder: lamps and windows don't clip
+    lin = np.where(lin > knee, knee + (1.0 - knee) * (1.0 - np.exp(-(lin - knee) / (1.0 - knee))), lin)
+    return _to_srgb(lin), dark_scene
+
+
 def _beautify_face(img: np.ndarray, face: Face, p: Params) -> np.ndarray:
     pr, iod = p.preset, face.iod
     m = p.makeup * face.frontalness   # no makeup on faces turned away from the camera
@@ -194,13 +261,21 @@ def _beautify_face(img: np.ndarray, face: Face, p: Params) -> np.ndarray:
     img = _local(img, face, eyes, 0.35 * iod, lambda s, f, r: makeup.aegyo_sal(s, f, r, pr.aegyo * m))
     img = _local(img, face, eyes, 0.08 * iod, lambda s, f, r: makeup.brighten_eyes(
         s, r, pr.eye_brighten * m, face=f, catchlight=pr.lens <= 0.0))   # the lens step handles catchlights
-    img = _local(img, face, eyes, 0.08 * iod, lambda s, f, r: makeup.iris_lens(s, f, r, pr.lens * m))
+    img = _local(img, face, eyes, 0.08 * iod, lambda s, f, r: makeup.iris_lens(s, f, r, pr.lens * m, skin_l=float(light[0])))
     # Hair, a hat brim, a dark collar: whatever was dark and is not skin stays dark.
     # Corrections aimed at the face spill onto them as a grey haze otherwise.
+    # Not the features, though: in a dim photo the lids, lash lines, lips and nostrils are
+    # dark too, and pulling them back would leave dark rings in a brightened face.
     was = ops.luminance(original)
-    dark = (1.0 - smoothstep(0.1, 0.28, was)) * (1.0 - np.clip(regions.skin * 2.0, 0.0, 1.0)) * (1.0 - regions.eyes)
+    eye_zone = dilate(np.maximum(fill_poly(regions.shape, face.pts(F.RIGHT_EYE)),
+                                 fill_poly(regions.shape, face.pts(F.LEFT_EYE))), 0.14 * iod)
+    nose_zone = fill_poly(regions.shape, cv2.convexHull(face.pts(F.NOSE_LOWER).astype(np.float32)).reshape(-1, 2))
+    features = blur(np.maximum.reduce([eye_zone, dilate(regions.lips_outer, 0.06 * iod), dilate(nose_zone, 0.03 * iod)]),
+                    0.03 * iod)
+    dark = (1.0 - smoothstep(0.1, 0.28, was)) * (1.0 - np.clip(regions.skin * 2.0, 0.0, 1.0)) * (1.0 - features)
     img = img + (np.minimum(original, img) - img) * dark[..., None]
-    img = skin.hair_depth(img, regions, min(1.0, p.filter / max(pr.default_filter, 1e-6)) * pr.hair)
+    img = skin.hair_depth(img, regions, min(1.0, p.filter / max(pr.default_filter, 1e-6)) * pr.hair
+                          * (1.0 - 0.6 * p.dark_scene))
     img = _local(img, face, F.LIPS_INNER, 0.06 * iod, lambda s, f, r: makeup.whiten_teeth(
         s, f, r, pr.teeth * min(1.0, m + 0.3)))
     return img
@@ -212,6 +287,8 @@ def process(rgb: np.ndarray, preset_id: str | None, adj: Adjustments | None,
     p = resolve(get_preset(preset_id), adj or Adjustments())
     img = to_float(rgb)
     usable = [f for f in faces if f.iod >= MIN_IOD_PX]
+    img, dark_scene = _lift_dark_scene(img, usable, min(1.0, p.whiten / max(p.preset.whiten, 1e-6)))
+    p = replace(p, dark_scene=dark_scene)
 
     for face in usable:  # appearance edits, each inside its own crop
         x0, y0, x1, y1 = face.roi(img.shape)
@@ -241,7 +318,13 @@ def process(rgb: np.ndarray, preset_id: str | None, adj: Adjustments | None,
         img = reshape.enlarge_iris(img, face, p.eyes * k)
         img = reshape.plump_lips(img, face, p.preset.lip_plump * min(1.0, p.makeup / max(p.preset.default_makeup, 1e-6)) * k)
 
-    img = color.apply_grade(img, p.preset.grade, p.filter)
+    grade = p.preset.grade
+    if p.dark_scene > 0.0:
+        # In a dark photo the background is already black; deepening shadows and adding
+        # contrast would cut the brightened face out of it even more.
+        grade = replace(grade, shadows=grade.shadows * (1.0 - 0.75 * p.dark_scene) if grade.shadows < 0 else grade.shadows,
+                        contrast=grade.contrast * (1.0 - 0.5 * p.dark_scene) if grade.contrast > 0 else grade.contrast)
+    img = color.apply_grade(img, grade, p.filter)
     # Retouching and the soft grade cost a little crispness; give it back. Faces get a
     # second, finer pass (feathered, so no visible box) to make eyes, brows and lips crisp.
     h, w = img.shape[:2]
