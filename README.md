@@ -72,6 +72,10 @@ docker run -p 8000:8000 --env-file .env seoulglow
 
 国内服务器构建时，用 `--build-arg FACE_MODEL_URL=<镜像地址>` 指定人脸模型的下载地址。
 
+### 部署到 Render（免费）
+
+仓库里带了 `render.yaml`：在 [render.com](https://render.com) 用 GitHub 登录，New → Blueprint，选这个仓库即可。之后每次推送代码会自动重新部署。免费套餐 15 分钟没人访问会休眠，再打开要等约 1 分钟。因为是 Docker 部署，以后换到国内云服务器用同一个 `Dockerfile` 就行。
+
 ### HTTP 接口
 
 | 接口 | 说明 |

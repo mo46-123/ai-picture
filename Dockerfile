@@ -19,4 +19,5 @@ RUN python scripts/download_models.py --url "$FACE_MODEL_URL" \
 
 ENV HOST=0.0.0.0 PORT=8000 AUTO_DOWNLOAD_MODEL=0
 EXPOSE 8000
-CMD ["python", "-m", "seoulglow.web", "--host", "0.0.0.0", "--port", "8000"]
+# Hosting platforms (Render, etc.) pass the port to listen on in $PORT.
+CMD ["sh", "-c", "python -m seoulglow.web --host 0.0.0.0 --port ${PORT:-8000}"]

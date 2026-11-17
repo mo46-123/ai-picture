@@ -1,0 +1,16 @@
+# Render blueprint: https://render.com -> New -> Blueprint -> pick this repository.
+services:
+  - type: web
+    name: seoulglow
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      # The free plan has 512 MB of memory: process one photo at a time, at a smaller size.
+      - key: MAX_SIDE
+        value: "1280"
+      - key: PROCESS_CONCURRENCY
+        value: "1"
+      - key: AUTO_DOWNLOAD_MODEL
+        value: "0"
