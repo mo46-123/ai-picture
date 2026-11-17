@@ -257,6 +257,37 @@ def brighten(img: np.ndarray, regions: FaceRegions, amount: float,
     return ops.from_lab_where(img, lab, mask)
 
 
+# Landmarks around the cheekbone: (outer, under-eye, inner, inner-lower, outer-lower, inner-upper)
+_CHEEK = {"right": (117, 118, 119, 101, 50, 100), "left": (346, 347, 348, 330, 280, 329)}
+_NOSE_WING = {"right": (129, 64), "left": (358, 294)}
+_EAR_FRONT = {"right": (93, 132), "left": (323, 361)}
+
+
+def cheekbone_patch(face: Face, side: str) -> tuple[np.ndarray, float, float, float]:
+    """Center, sigmas and angle of the lit patch on one cheekbone.
+
+    Placed from landmarks rather than from the eye position, so it sits on the
+    cheekbone itself and follows the face in three-quarter views: the near cheek is
+    wide and its patch broad, the far cheek is foreshortened and its patch narrow.
+    """
+    outer, under_eye, inner, inner_low, outer_low, inner_up = (face.pt(i) for i in _CHEEK[side])
+    center = (outer + under_eye + inner_low + outer_low) / 4.0     # the cheekbone's high point
+    width = float(np.linalg.norm(outer - inner_up))
+    height = float(np.linalg.norm(under_eye - outer_low))
+    axis = inner_low - outer
+    angle = float(np.degrees(np.arctan2(axis[1], axis[0])))
+    if side == "left":                      # same direction convention on both cheeks
+        angle += 180.0
+    iod = face.iod
+    return center, max(0.3 * width, 0.05 * iod), max(0.45 * height, 0.04 * iod), angle
+
+
+def _bridge_line(face: Face, shape: tuple[int, int]) -> np.ndarray:
+    """The upper and middle nose bridge (not the tip), as a soft band."""
+    line = polyline(shape, face.pts([168, 6, 197, 195]), thickness=0.08 * face.iod)
+    return blur(line, 0.03 * face.iod)
+
+
 def glass_glow(img: np.ndarray, face: Face, regions: FaceRegions, amount: float,
                reference: np.ndarray | None = None) -> np.ndarray:
     """水光肌: a dewy, slightly oily shine rather than a flat white glow.
@@ -279,23 +310,28 @@ def glass_glow(img: np.ndarray, face: Face, regions: FaceRegions, amount: float,
     ref_lum = ops.luminance(reference) if reference is not None else lum
     local = ops.gaussian(ref_lum, 0.09 * iod)
     natural = np.clip(ref_lum - local, 0.0, 0.25) * skin * smoothstep(0.35, 0.7, ref_lum)
+    # The photo's own shine along the nose bridge reads as a long thin stripe once it is
+    # amplified; on a retouched face the brightest point of the nose is its tip.
+    natural = natural * (1.0 - 0.75 * _bridge_line(face, shape))
 
     # 2) placed specular spots (tight cores)
     spots = np.zeros(shape, np.float32)
     bridge = (face.pt(6) + face.pt(197) + face.pt(195)) / 3.0
-    gaussian_ellipse(shape, bridge, 0.02 * iod, 0.15 * iod, ang, out=spots, weight=1.0)
-    gaussian_ellipse(shape, face.pt(F.NOSE_TIP) - y * 0.03 * iod, 0.035 * iod, 0.03 * iod, ang, out=spots, weight=0.9)
-    for side in ("right", "left"):
-        c = face.eye_center(side) + y * 0.33 * iod + face.outward(side) * 0.25 * iod
-        tilt = ang + (-24.0 if side == "left" else 24.0)
-        gaussian_ellipse(shape, c, 0.13 * iod, 0.05 * iod, tilt, out=spots, weight=1.0)
+    gaussian_ellipse(shape, bridge, 0.02 * iod, 0.12 * iod, ang, out=spots, weight=0.25)
+    gaussian_ellipse(shape, face.pt(F.NOSE_TIP) - y * 0.025 * iod, 0.045 * iod, 0.04 * iod, ang, out=spots, weight=1.0)
     gaussian_ellipse(shape, face.brow_mid - y * 0.36 * iod, 0.13 * iod, 0.05 * iod, ang, out=spots, weight=0.6)
     gaussian_ellipse(shape, face.pt(152) - y * 0.17 * iod, 0.06 * iod, 0.03 * iod, ang, out=spots, weight=0.5)
     gaussian_ellipse(shape, face.pt(0) - y * 0.035 * iod, 0.035 * iod, 0.014 * iod, ang, out=spots, weight=0.6)
     # Shine needs light to reflect: spots stay faint on skin that is in shadow.
     spots = np.clip(spots, 0.0, 1.0) ** 1.5 * skin * smoothstep(0.3, 0.75, lum)
+    # The cheekbone gets a broad, soft sheen (a lit patch), not a thin streak.
+    sheen = np.zeros(shape, np.float32)
+    for side in ("right", "left"):
+        c, sx, sy, a = cheekbone_patch(face, side)
+        gaussian_ellipse(shape, c, 0.75 * sx, 0.75 * sy, a, out=sheen)
+    sheen = np.clip(sheen, 0.0, 1.0) * skin * smoothstep(0.3, 0.75, lum)
 
-    shine = natural * (2.2 * amount) + spots * (0.42 * amount)
+    shine = natural * (2.2 * amount) + spots * (0.42 * amount) + sheen * (0.3 * amount)
     tint = np.array([1.0, 0.985, 0.97], np.float32)
     out = ops.screen(img, np.clip(shine, 0.0, 0.6)[..., None] * tint)
 
@@ -308,46 +344,69 @@ def glass_glow(img: np.ndarray, face: Face, regions: FaceRegions, amount: float,
 def sculpt(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) -> np.ndarray:
     """修容高光: shape the face with light instead of brightening it evenly.
 
-    Light falls on the cheekbones (one soft streak each) and the tip of the nose, with
-    a little on the bridge. From the cheekbone the skin darkens gradually toward the
-    side of the face, and the nose wings and the jaw keep a soft shadow, so the face
-    stays three-dimensional under very fair skin.
+    * The nose: the middle of the bridge is toned down and the brightest point is a
+      small soft patch on the tip; the nose wings keep a light, slightly pink shadow.
+    * The cheekbones get a broad lit patch, and the skin darkens gradually from there
+      toward the ears; the jaw turn keeps a soft shadow.
     """
     if amount <= 0.0:
         return img
     iod, shape, ang, y = face.iod, regions.shape, face.angle_deg, face.y_axis
     light = np.zeros(shape, np.float32)
     shade = np.zeros(shape, np.float32)
+    wing = np.zeros(shape, np.float32)
     tip = face.pt(F.NOSE_TIP)
-    gaussian_ellipse(shape, tip - y * 0.02 * iod, 0.05 * iod, 0.045 * iod, ang, out=light, weight=0.8)
-    gaussian_ellipse(shape, (face.pt(6) + face.pt(195)) / 2.0, 0.025 * iod, 0.16 * iod, ang, out=light, weight=0.5)
+    gaussian_ellipse(shape, tip - y * 0.025 * iod, 0.05 * iod, 0.045 * iod, ang, out=light, weight=0.85)
+    gaussian_ellipse(shape, (face.pt(6) + face.pt(195)) / 2.0, 0.025 * iod, 0.14 * iod, ang, out=light, weight=0.12)
     for side in ("right", "left"):
         out = face.outward(side)
-        cheekbone = face.eye_center(side) + y * 0.33 * iod + out * 0.25 * iod   # just below the eye's tail
-        tilt = ang + (-24.0 if side == "left" else 24.0)
-        gaussian_ellipse(shape, cheekbone, 0.15 * iod, 0.045 * iod, tilt, out=light, weight=1.1)
-        gaussian_ellipse(shape, tip + out * 0.17 * iod + y * 0.0 * iod, 0.04 * iod, 0.06 * iod, ang,
-                         out=shade, weight=0.8)                                  # nose wing
-    for index in (172, 397, 136, 365, 150, 379):                                 # along the jaw
+        c, sx, sy, a = cheekbone_patch(face, side)
+        gaussian_ellipse(shape, c, sx, sy, a, out=light, weight=0.75)            # soft, wide edges
+        gaussian_ellipse(shape, c, 0.55 * sx, 0.55 * sy, a, out=light, weight=0.45)  # on its high point
+        p, q = (face.pt(i) for i in _NOSE_WING[side])
+        gaussian_ellipse(shape, (p + q) / 2.0 + out * 0.015 * iod, 0.04 * iod, 0.065 * iod, ang, out=wing)
+    tip_dir = tip
+    for index in (132, 361, 58, 288, 172, 397, 136, 365, 150, 379):   # in front of the ears, the jaw turn
         jaw = face.pt(index)
-        inward = tip - jaw
-        jaw = jaw + inward / max(float(np.linalg.norm(inward)), 1e-6) * 0.05 * iod
-        gaussian_ellipse(shape, jaw, 0.11 * iod, 0.11 * iod, ang, out=shade, weight=0.8)
-    # falloff toward the side of the face, below the eye line
+        inward = tip_dir - jaw
+        jaw = jaw + inward / max(float(np.linalg.norm(inward)), 1e-6) * 0.06 * iod
+        gaussian_ellipse(shape, jaw, 0.12 * iod, 0.12 * iod, ang, out=shade, weight=0.7)
+    # gradual falloff from the cheekbones toward the sides of the face, below the eyes
     inside = (regions.face_poly > 0.5).astype(np.uint8)
     depth = cv2.distanceTransform(inside, cv2.DIST_L2, 3) / max(iod, 1.0)
     h, w = shape
     ys, xs = np.mgrid[0:h, 0:w].astype(np.float32)
     below = ((xs - face.eye_mid[0]) * y[0] + (ys - face.eye_mid[1]) * y[1]) / max(iod, 1.0)
-    side_fall = (1.0 - smoothstep(0.0, 0.34, depth)) * smoothstep(-0.1, 0.35, below)
+    side_fall = (1.0 - smoothstep(0.0, 0.42, depth)) ** 1.5 * smoothstep(-0.05, 0.4, below)
     shade = np.maximum(np.clip(shade, 0.0, 1.0), side_fall)
+    # From each cheekbone the light drops off steadily toward the front of the ear, so
+    # the lit patch reads as the high point of the cheek rather than a stripe on it.
+    ear_fall = np.zeros(shape, np.float32)
+    for side in ("right", "left"):
+        c, _, _, _ = cheekbone_patch(face, side)
+        ear = (face.pt(_EAR_FRONT[side][0]) + face.pt(_EAR_FRONT[side][1])) / 2.0
+        v = ear - c
+        reach = max(float(np.linalg.norm(v)), 1e-6)
+        u = v / reach
+        t = ((xs - c[0]) * u[0] + (ys - c[1]) * u[1]) / reach
+        across = ((xs - c[0]) * -u[1] + (ys - c[1]) * u[0]) / max(iod, 1.0)
+        ear_fall = np.maximum(ear_fall, smoothstep(0.08, 0.6, t) * np.exp(-0.5 * (across / 0.4) ** 2))
+    ear_fall = ear_fall * smoothstep(-0.05, 0.3, below)
     skin = regions.skin
     light = np.clip(light, 0.0, 1.0) * skin
+    wing = np.clip(wing, 0.0, 1.0) * skin * (1.0 - light)
     shade = shade * skin * (1.0 - light)
+    ear_fall = ear_fall * skin * (1.0 - light)
     lab = ops.to_lab(img)
     lightness = lab[..., 0]
-    lab[..., 0] = lightness + ((100.0 - lightness) * 0.32 * light - lightness * 0.1 * shade) * amount
-    return ops.from_lab_where(img, lab, np.maximum(light, shade))
+    # tone down the long thin highlight on the middle of the bridge (keep the tip)
+    bridge = _bridge_line(face, shape) * skin * (1.0 - np.clip(light * 2.0, 0.0, 1.0))
+    excess = np.clip(lightness - ops.gaussian(lightness, 0.08 * iod), 0.0, None)
+    lightness = lightness - excess * bridge * min(1.0, 0.8 * amount)
+    lab[..., 0] = lightness + ((100.0 - lightness) * 0.32 * light
+                               - lightness * (0.13 * shade + 0.16 * ear_fall + 0.09 * wing)) * amount
+    lab[..., 1] += 4.0 * wing * amount            # shadows on skin are a little pink, not grey
+    return ops.from_lab_where(img, lab, np.maximum.reduce([light, shade, ear_fall, wing, bridge]))
 
 
 def matte(img: np.ndarray, regions: FaceRegions, amount: float) -> np.ndarray:

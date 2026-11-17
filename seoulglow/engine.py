@@ -192,7 +192,8 @@ def _beautify_face(img: np.ndarray, face: Face, p: Params) -> np.ndarray:
         img = _local(img, face, F.LIPS_OUTER, 0.15 * iod, lambda s, f, r: makeup.lips(
             s, f, r, lip_c, pr.lip_intensity * m, pr.lip_gradient, pr.lip_gloss * m))
     img = _local(img, face, eyes, 0.35 * iod, lambda s, f, r: makeup.aegyo_sal(s, f, r, pr.aegyo * m))
-    img = _local(img, face, eyes, 0.08 * iod, lambda s, f, r: makeup.brighten_eyes(s, r, pr.eye_brighten * m, face=f))
+    img = _local(img, face, eyes, 0.08 * iod, lambda s, f, r: makeup.brighten_eyes(
+        s, r, pr.eye_brighten * m, face=f, catchlight=pr.lens <= 0.0))   # the lens step handles catchlights
     img = _local(img, face, eyes, 0.08 * iod, lambda s, f, r: makeup.iris_lens(s, f, r, pr.lens * m))
     # Hair, a hat brim, a dark collar: whatever was dark and is not skin stays dark.
     # Corrections aimed at the face spill onto them as a grey haze otherwise.

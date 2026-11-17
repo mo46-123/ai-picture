@@ -274,7 +274,8 @@ def aegyo_sal(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) 
     return ops.from_lab_where(img, lab, band + crease)
 
 
-def brighten_eyes(img: np.ndarray, regions: FaceRegions, amount: float, face: Face | None = None) -> np.ndarray:
+def brighten_eyes(img: np.ndarray, regions: FaceRegions, amount: float, face: Face | None = None,
+                  catchlight: bool = True) -> np.ndarray:
     """亮眼: open up dark eyes, add contrast and a catchlight, whiten the sclera.
 
     Eyes in shade come out as black slits; retouchers lift them until the iris and
@@ -298,7 +299,7 @@ def brighten_eyes(img: np.ndarray, regions: FaceRegions, amount: float, face: Fa
     lab[..., 1] = a * (1.0 - 0.8 * sclera * min(1.0, amount))
     lab[..., 2] = b * (1.0 - 0.8 * sclera * min(1.0, amount))
     out = ops.from_lab_where(img, lab, mask)
-    if face is not None and face.landmarks.shape[0] >= 478:        # iris centers: 468 (right), 473 (left)
+    if catchlight and face is not None and face.landmarks.shape[0] >= 478:   # iris centers: 468 (right), 473 (left)
         spark = np.zeros(regions.shape, np.float32)
         for center, edge in ((468, 469), (473, 474)):
             r = float(np.linalg.norm(face.pt(center) - face.pt(edge)))
@@ -327,38 +328,64 @@ def whiten_teeth(img: np.ndarray, face: Face, regions: FaceRegions, amount: floa
 
 
 def iris_lens(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) -> np.ndarray:
-    """美瞳: a lighter, slightly grey iris with a dark outer ring and bigger catchlights."""
+    """美瞳: a soft grey-blue iris.
+
+    Real tinted lenses look gentle because the whole iris is lifted evenly up to a
+    soft rim. A dark crisp ring around a bright band, plus big white reflections,
+    makes the eye look round and hard (doll-like). So: the iris is lifted evenly and
+    tinted grey-blue, the rim is softened, over-bright reflections are calmed, and the
+    pupil stays deep. A catchlight is only drawn when the photo has none.
+    """
     if amount <= 0.0 or face.landmarks.shape[0] < 478:
         return img
     shape = regions.shape
     ys, xs = np.mgrid[0:shape[0], 0:shape[1]].astype(np.float32)
     iris = np.zeros(shape, np.float32)
-    ring = np.zeros(shape, np.float32)
+    rim = np.zeros(shape, np.float32)
     pupil = np.zeros(shape, np.float32)
+    disk = np.zeros(shape, np.float32)
     spark = np.zeros(shape, np.float32)
+    eye = regions.eyes
+    k = float(np.clip(amount, 0.0, 1.0))
+    lab = ops.to_lab(img)
+    lightness = lab[..., 0]
+    radii = []
     for center, edge in ((468, 469), (473, 474)):
         c = face.pt(center)
         r = float(np.linalg.norm(c - face.pt(edge)))
         if r < 5.0:
             continue
+        radii.append(r)
         d = np.sqrt((xs - c[0]) ** 2 + (ys - c[1]) ** 2) / r
-        # the band between pupil and rim is what a colored lens changes
-        pupil = np.maximum(pupil, 1.0 - smoothstep(0.26, 0.42, d))
-        # lightest just outside the pupil, fading toward the rim: the layered look of a real iris
-        iris = np.maximum(iris, smoothstep(0.34, 0.52, d) * (1.0 - 0.75 * smoothstep(0.5, 1.0, d)) * (1.0 - smoothstep(0.9, 1.05, d)))
-        ring = np.maximum(ring, smoothstep(0.7, 0.98, d) * (1.0 - smoothstep(0.98, 1.2, d)))   # soft rim
-        gaussian_ellipse(shape, c + np.array([-0.32, -0.36]) * r, 0.17 * r, 0.17 * r, out=spark)
-        gaussian_ellipse(shape, c + np.array([0.36, 0.34]) * r, 0.09 * r, 0.09 * r, out=spark, weight=0.5)
-    eye = regions.eyes
-    k = float(np.clip(amount, 0.0, 1.0))
-    iris, ring = iris * eye * k, np.maximum(ring, pupil * 0.8) * eye * k    # rim and pupil stay deep
-    lab = ops.to_lab(img)
-    lightness = lab[..., 0]
-    # dark irises are lifted toward a mid grey; an iris that is already light is left alone
-    lab[..., 0] = lightness + np.clip(50.0 - lightness, -30.0, 36.0) * iris * 0.8 - np.clip(lightness - 14.0, 0.0, None) * ring * 0.22
-    lab[..., 1] += (-1.0 - lab[..., 1]) * iris * 0.45      # toward a cool grey
-    lab[..., 2] += (-12.0 - lab[..., 2]) * iris * 0.55
-    weight = np.maximum(iris, ring)
-    out = ops.from_lab_where(img, lab, weight)
-    spark = np.clip(spark, 0.0, 1.0) * eye * (0.6 * k)
+        pupil = np.maximum(pupil, 1.0 - smoothstep(0.24, 0.4, d))
+        iris = np.maximum(iris, smoothstep(0.3, 0.46, d) * (1.0 - 0.3 * smoothstep(0.55, 1.0, d))
+                          * (1.0 - smoothstep(0.9, 1.1, d)))
+        rim = np.maximum(rim, smoothstep(0.7, 0.92, d) * (1.0 - smoothstep(1.0, 1.2, d)))
+        inside = (1.0 - smoothstep(0.9, 1.05, d)) * eye
+        disk = np.maximum(disk, inside)
+        # does the photo already have a reflection in this eye?
+        vals = lightness[inside > 0.5]
+        if vals.size and float(np.percentile(vals, 99)) < float(np.median(vals)) + 25.0:
+            gaussian_ellipse(shape, c + np.array([-0.3, -0.34]) * r, 0.13 * r, 0.13 * r, out=spark)
+    if not radii:
+        return img
+    iris, rim, pupil, disk = iris * eye * k, rim * eye * k, pupil * eye * k, disk * k
+    # soften the limbal ring: a crisp dark edge is what makes the eye look hard
+    soft = ops.gaussian(lightness, 0.2 * float(np.mean(radii)))
+    lightness = lightness + (soft - lightness) * rim * 0.6
+    # reflections: calmed a little, and kept out of the iris lift below
+    body = float(np.median(lightness[disk > 0.3 * k])) if np.any(disk > 0.3 * k) else 30.0
+    spec = smoothstep(body + 14.0, body + 28.0, lightness)
+    lightness = lightness - np.clip(lightness - 62.0, 0.0, None) * disk * 0.55
+    # an even move toward a mid grey-blue: dark irises are lifted, very light ones
+    # (grey lenses) are deepened a little; a bit stronger at the rim so it doesn't stay dark
+    lift = np.clip(40.0 - lightness, -18.0, 26.0) * (iris * 0.8 + rim * 0.3) * (1.0 - spec)
+    lightness = lightness + lift
+    lightness = lightness - np.clip(lightness - 12.0, 0.0, None) * pupil * 0.3 * (1.0 - spec)   # the pupil stays
+    lab[..., 0] = lightness
+    tint = np.maximum(iris, rim * 0.6)
+    lab[..., 1] += (-2.0 - lab[..., 1]) * tint * 0.45      # a cool grey-blue
+    lab[..., 2] += (-11.0 - lab[..., 2]) * tint * 0.55
+    out = ops.from_lab_where(img, lab, np.maximum.reduce([iris, rim, pupil, disk]))
+    spark = np.clip(spark, 0.0, 1.0) * eye * (0.35 * k)
     return np.clip(ops.screen(out, spark[..., None] * np.ones(3, np.float32)), 0.0, 1.0)
