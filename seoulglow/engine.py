@@ -237,7 +237,7 @@ def _beautify_face(img: np.ndarray, face: Face, p: Params) -> np.ndarray:
     img = skin.under_eye(img, face, regions, pr.dark_circles * p.cleanup * face.frontalness)
     img = skin.soften_folds(img, face, regions, pr.folds * p.cleanup * face.frontalness)
     img = skin.brighten(img, regions, p.whiten, pr.tone_a * p.tone_scale, pr.tone_b * p.tone_scale)
-    img = skin.relief(img, original, face, regions, pr.relief, boost=1.35)
+    img = skin.relief(img, original, face, regions, pr.relief, boost=1.35, cheeks=0.65)
     light = _skin_light(img, regions)                     # measure again, after brightening
     dim = float(np.clip(light[0] / 62.0, 0.35, 1.0))     # darkening makeup is eased off on dim faces
     blush_c, brow_c, shadow_c = _adapt(pr.blush_rgb, light), _adapt(pr.brow_rgb, light), _adapt(pr.shadow_rgb, light)

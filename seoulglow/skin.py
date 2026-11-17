@@ -241,8 +241,18 @@ def _under_eye_band(face: Face, regions: FaceRegions) -> np.ndarray:
     return blur(band, 0.05 * iod)
 
 
+def _cheek_zone(face: Face, shape: tuple[int, int]) -> np.ndarray:
+    """Soft mask of the cheeks: below the eyes, beside the nose and the mouth."""
+    h, w = shape
+    ys, xs = np.mgrid[0:h, 0:w].astype(np.float32)
+    tip, x, y = face.pt(F.NOSE_TIP), face.x_axis, face.y_axis
+    across = np.abs((xs - tip[0]) * x[0] + (ys - tip[1]) * x[1]) / face.iod
+    down = ((xs - face.eye_mid[0]) * y[0] + (ys - face.eye_mid[1]) * y[1]) / face.iod
+    return (smoothstep(0.2, 0.36, across) * smoothstep(0.15, 0.32, down) * (1.0 - smoothstep(0.95, 1.15, down))).astype(np.float32)
+
+
 def relief(img: np.ndarray, original: np.ndarray, face: Face, regions: FaceRegions,
-           amount: float, boost: float = 1.2) -> np.ndarray:
+           amount: float, boost: float = 1.2, cheeks: float = 1.0) -> np.ndarray:
     """立体: give the face back its own light and shade.
 
     Brightening, whitening and evening the skin each lift the shadows a little more
@@ -275,6 +285,8 @@ def relief(img: np.ndarray, original: np.ndarray, face: Face, regions: FaceRegio
     scale = float(np.clip((m_now + 16.0) / max(m_before + 16.0, 1.0), 0.8, 2.0))
     goal = np.clip(shape_before * scale * boost, -25.0, 25.0)
     zone = w * (1.0 - _under_eye_band(face, regions)) * float(np.clip(amount, 0.0, 1.5))
+    if cheeks < 1.0:   # softer on the cheeks than on the nose, jaw and eye sockets
+        zone = zone * (1.0 - (1.0 - cheeks) * _cheek_zone(face, regions.shape))
     lab[..., 0] = now + (goal - shape_now) * zone
     return ops.from_lab_where(img, lab, zone)
 
@@ -434,7 +446,7 @@ def sculpt(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) -> 
         v = face.pt(F.MOUTH_RIGHT if side == "right" else F.MOUTH_LEFT) - start
         length = max(float(np.linalg.norm(v)), 1e-6)
         gaussian_ellipse(shape, start + 0.3 * v, 0.22 * length, 0.055 * iod,
-                         float(np.degrees(np.arctan2(v[1], v[0]))), out=shade, weight=0.85)
+                         float(np.degrees(np.arctan2(v[1], v[0]))), out=shade, weight=0.6)
     tip_dir = tip
     for index in (132, 361, 58, 288, 172, 397, 136, 365, 150, 379):   # in front of the ears, the jaw turn
         jaw = face.pt(index)
@@ -478,7 +490,7 @@ def sculpt(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) -> 
     # The cheekbones get a restrained light: on a face that is not very bright yet, a
     # strong one turns into two pale patches. Depth comes from the shadows instead.
     lab[..., 0] = lightness + ((100.0 - lightness) * (0.32 * light + 0.17 * cheek)
-                               - lightness * (0.13 * shade + 0.16 * ear_fall + 0.09 * wing)) * amount
+                               - lightness * (0.13 * shade + 0.12 * ear_fall + 0.09 * wing)) * amount
     lab[..., 1] += 4.0 * wing * amount            # shadows on skin are a little pink, not grey
     return ops.from_lab_where(img, lab, np.maximum.reduce([light, cheek, shade, ear_fall, wing, bridge]))
 
