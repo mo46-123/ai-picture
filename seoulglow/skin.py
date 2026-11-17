@@ -231,7 +231,11 @@ def brighten(img: np.ndarray, regions: FaceRegions, amount: float,
     face = regions.face
     total = float(regions.skin.sum())
     skin_l = float((lab[..., 0] * regions.skin).sum() / total) if total > 1.0 else 60.0
-    not_hair = smoothstep(skin_l - 36.0, skin_l - 14.0, ops.gaussian(lab[..., 0], 0.02 * face.iod))
+    not_hair = smoothstep(skin_l - 36.0, skin_l - 14.0, lab[..., 0])
+    # A fringe is mostly hair with slivers of skin showing through: leave all of it alone.
+    # Brows are a thin band, so the skin around them still counts as face.
+    hairy = ops.gaussian((lab[..., 0] < skin_l - 24.0).astype(np.float32), 0.07 * face.iod)
+    not_hair = not_hair * (1.0 - smoothstep(0.3, 0.55, hairy))
     keep_out = blur(np.maximum(regions.eyes, regions.lips_outer), 0.012 * face.iod)
     mask = np.maximum(mask, regions.face_light * not_hair * (1.0 - np.clip(keep_out * 1.5, 0.0, 1.0)))
     if total > 1.0:
