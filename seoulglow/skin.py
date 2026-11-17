@@ -225,6 +225,13 @@ def _masked_blur(x: np.ndarray, weight: np.ndarray, sigma: float) -> np.ndarray:
     return ops.gaussian(x * weight, sigma) / np.maximum(ops.gaussian(weight, sigma), 1e-3)
 
 
+def _red_lightness(img: np.ndarray) -> np.ndarray:
+    """L*-like lightness of the red channel alone."""
+    r = img[..., 0]
+    lin = np.where(r <= 0.04045, r / 12.92, ((r + 0.055) / 1.055) ** 2.4)
+    return (116.0 * np.cbrt(lin) - 16.0).astype(np.float32)
+
+
 def _under_eye_band(face: Face, regions: FaceRegions) -> np.ndarray:
     iod, y = face.iod, face.y_axis
     band = np.zeros(regions.shape, np.float32)
@@ -254,13 +261,17 @@ def relief(img: np.ndarray, original: np.ndarray, face: Face, regions: FaceRegio
     if total < 50.0:
         return img
     lab = ops.to_lab(img)
-    now, before = lab[..., 0], ops.to_lab(original)[..., 0]
+    now = lab[..., 0]
+    # Light and shade are read from the red channel, as retouchers do: shading darkens
+    # every channel alike, but red blemishes (acne, marks, flushed patches) are nearly
+    # invisible in red, so they are not mistaken for the face's shape and brought back.
+    before, current = _red_lightness(original), _red_lightness(img)
     small, large = 0.08 * iod, 0.4 * iod
     shape_before = _masked_blur(before, w, small) - _masked_blur(before, w, large)
-    shape_now = _masked_blur(now, w, small) - _masked_blur(now, w, large)
+    shape_now = _masked_blur(current, w, small) - _masked_blur(current, w, large)
     # A shading ratio shows up larger in L* on brighter skin: scale by (L*+16).
     m_before = float((before * w).sum() / total)
-    m_now = float((now * w).sum() / total)
+    m_now = float((current * w).sum() / total)
     scale = float(np.clip((m_now + 16.0) / max(m_before + 16.0, 1.0), 0.8, 2.0))
     goal = np.clip(shape_before * scale * boost, -25.0, 25.0)
     zone = w * (1.0 - _under_eye_band(face, regions)) * float(np.clip(amount, 0.0, 1.5))
