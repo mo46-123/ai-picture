@@ -10,7 +10,7 @@ from . import face as F
 from . import ops
 from .face import Face
 from .imageio import to_uint8
-from .masks import FaceRegions, blur, fill_poly, gaussian_ellipse, polyline, smoothstep
+from .masks import FaceRegions, blur, dilate, fill_poly, gaussian_ellipse, polyline, smoothstep
 
 
 def spot_map(img: np.ndarray, regions: FaceRegions) -> np.ndarray:
@@ -178,13 +178,244 @@ def soften_folds(img: np.ndarray, face: Face, regions: FaceRegions, amount: floa
 NOMINAL_SKIN = (68.0, 13.0, 17.0)   # Lab of evenly lit light skin
 
 
+def _to_linear(x: np.ndarray) -> np.ndarray:
+    return np.where(x <= 0.04045, x / 12.92, ((x + 0.055) / 1.055) ** 2.4).astype(np.float32)
+
+
+def _to_srgb(x: np.ndarray) -> np.ndarray:
+    x = np.clip(x, 0.0, 1.0)
+    return np.where(x <= 0.0031308, x * 12.92, 1.055 * x ** (1.0 / 2.4) - 0.055).astype(np.float32)
+
+
+def _lstar_to_y(lightness: float) -> float:
+    return ((lightness + 16.0) / 116.0) ** 3
+
+
+# Landmarks on the face's vertical midline, used to mirror one half onto the other.
+_MIDLINE = [10, 151, 9, 8, 168, 6, 197, 195, 5, 4, 1, 19, 94, 2, 164, 0, 17, 18, 200, 199, 175, 152]
+
+
+def _mirror_maps(face: Face, shape: tuple[int, int]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """For every pixel, where its mirror image lies on the other half of the face.
+
+    Positions are measured from the face's own midline and scaled by each half's width
+    at that height, so a three-quarter view (one half foreshortened) maps cheek to cheek.
+    Also returns each pixel's signed, normalized distance from the midline (0 = middle,
+    -1 / +1 = the edge of the face on either side, + along the face's x axis).
+    """
+    h, w = shape
+    ys, xs = np.mgrid[0:h, 0:w].astype(np.float32)
+    o, xa, ya = face.eye_mid, face.x_axis.astype(np.float32), face.y_axis.astype(np.float32)
+    u = (xs - o[0]) * xa[0] + (ys - o[1]) * xa[1]
+    v = (xs - o[0]) * ya[0] + (ys - o[1]) * ya[1]
+    mid_pts = face.pts(_MIDLINE) - o
+    coef = np.polyfit(mid_pts @ ya, mid_pts @ xa, 1)
+    mid = (coef[0] * v + coef[1]).astype(np.float32)
+    oval = face.pts(F.FACE_OVAL) - o
+    ou, ov = oval @ xa, oval @ ya
+    off = ou - np.polyval(coef, ov)
+    widths = []
+    for sign in (-1.0, 1.0):
+        keep = (off * sign) > 0.15 * face.iod
+        order = np.argsort(ov[keep])
+        widths.append((ov[keep][order], np.abs(off[keep][order])))
+    hw_neg = np.interp(v, *widths[0]).astype(np.float32)
+    hw_pos = np.interp(v, *widths[1]).astype(np.float32)
+    du = u - mid
+    side_neg = du < 0
+    own = np.where(side_neg, hw_neg, hw_pos)
+    other = np.where(side_neg, hw_pos, hw_neg)
+    mu = mid - du * other / np.maximum(own, 1.0)
+    map_x = (o[0] + mu * xa[0] + v * ya[0]).astype(np.float32)
+    map_y = (o[1] + mu * xa[1] + v * ya[1]).astype(np.float32)
+    return map_x, map_y, (du / np.maximum(own, 1.0)).astype(np.float32)
+
+
+def _midline_frame(face: Face):
+    """The face's midline and half widths: functions of height v (along the face's y
+    axis, from the eye midpoint) giving the midline's x offset and each half's width."""
+    o, xa, ya = face.eye_mid, face.x_axis, face.y_axis
+    mid_pts = face.pts(_MIDLINE) - o
+    coef = np.polyfit(mid_pts @ ya, mid_pts @ xa, 1)
+    oval = face.pts(F.FACE_OVAL) - o
+    ou, ov = oval @ xa, oval @ ya
+    off = ou - np.polyval(coef, ov)
+    tables = []
+    for sign in (-1.0, 1.0):
+        keep = (off * sign) > 0.15 * face.iod
+        order = np.argsort(ov[keep])
+        tables.append((ov[keep][order], np.abs(off[keep][order])))
+    return coef, tables
+
+
+# Where the light is read: heights (in eye distances below the eye line) and distances
+# from the midline (as a fraction of the half width).
+_LIGHT_HEIGHTS = (-0.45, 0.35, 0.6, 0.85)          # forehead, cheekbones, cheeks, beside the mouth
+_LIGHT_ACROSS = (0.2, 0.4, 0.6, 0.8)
+
+
+def _patch_light(y: np.ndarray, center: np.ndarray, radius: float, usable: np.ndarray) -> float | None:
+    """Typical luminance of the skin in a small disk; dark hair strands are left out by
+    comparing with the disk's own brighter pixels, not with the rest of the face."""
+    h, w = y.shape
+    r = int(np.ceil(radius))
+    x0, x1 = max(0, int(center[0]) - r), min(w, int(center[0]) + r + 1)
+    y0, y1 = max(0, int(center[1]) - r), min(h, int(center[1]) + r + 1)
+    if x1 - x0 < 2 or y1 - y0 < 2:
+        return None
+    yy, xx = np.mgrid[y0:y1, x0:x1]
+    inside = ((xx - center[0]) ** 2 + (yy - center[1]) ** 2 <= radius ** 2) & (usable[y0:y1, x0:x1] > 0.5)
+    values = y[y0:y1, x0:x1][inside]
+    if values.size < 12:
+        return None
+    values = values[values > 0.35 * np.percentile(values, 75)]
+    if values.size < 8:
+        return None
+    level = float(np.median(values))
+    # Skin is smooth at this scale; strands of hair are not. A patch that is mostly hair
+    # would report the hair's darkness as shadow, so it is not used.
+    if float(np.std(values)) > 0.35 * level:
+        return None
+    return level
+
+
+def side_light(face: Face, img: np.ndarray, regions: FaceRegions) -> tuple[np.ndarray, float] | None:
+    """How the light differs between the two halves of the face, from the midline out.
+
+    At a few heights, the skin is read at matching points on both halves at 0.2, 0.4,
+    0.6 and 0.8 of the way from the midline to the edge. Returns half the difference
+    (in stops, + where the +x half is brighter) at each of those distances, and the
+    share of readings that agree with it, or None if too little could be read.
+    """
+    y = np.maximum(_to_linear(img) @ ops.LUMA, 1e-4)
+    usable = (regions.face_poly > 0.5) & (regions.features < 0.3) & (regions.fine_lines < 0.3)
+    coef, tables = _midline_frame(face)
+    o, xa, ya, iod = face.eye_mid, face.x_axis, face.y_axis, face.iod
+    radius = 0.06 * iod
+    readings = {a: [] for a in _LIGHT_ACROSS}
+    for height in _LIGHT_HEIGHTS:
+        v = height * iod
+        mid = float(np.polyval(coef, v))
+        hw = [float(np.interp(v, *t)) for t in tables]
+        for a in _LIGHT_ACROSS:
+            pa = o + xa * (mid - a * hw[0]) + ya * v
+            pb = o + xa * (mid + a * hw[1]) + ya * v
+            la = _patch_light(y, pa, radius, usable)
+            lb = _patch_light(y, pb, radius, usable)
+            if la is not None and lb is not None:
+                readings[a].append(0.5 * float(np.log2(lb / la)))
+    profile, all_values = [], []
+    for a in _LIGHT_ACROSS:
+        if len(readings[a]) >= 2:
+            profile.append(float(np.median(readings[a])))
+            all_values += readings[a]
+        else:
+            profile.append(np.nan)
+    profile = np.array(profile)
+    known = ~np.isnan(profile)
+    if known.sum() < 2:
+        return None
+    # fill gaps from the neighbours (the far side of a turned face is often unreadable
+    # near its edge: keep what was read further in)
+    profile = np.interp(np.array(_LIGHT_ACROSS), np.array(_LIGHT_ACROSS)[known], profile[known])
+    typical = float(np.median(all_values))
+    agree = float(np.mean([(np.sign(x) == np.sign(typical)) and abs(x - typical) <= 0.6 for x in all_values]))
+    return profile, agree
+
+
+def balance_light(img: np.ndarray, face: Face, regions: FaceRegions, strength: float = 1.0) -> np.ndarray:
+    """阴阳脸修正: even out light that falls on one side of the face only.
+
+    A lamp or window to one side leaves half the face bright and half dark. Brightening
+    such a face as it is turns the lit half white while the dark half stays dull and
+    red, and the color model even stops recognizing the dark half as skin. A retoucher
+    evens the two halves first.
+
+    The light is read on the skin at matching points of the two halves, from the
+    midline out. Only the difference between the halves is the lamp; shading that both
+    halves share (eye sockets, the sides of the nose, under the cheekbones and the jaw)
+    is the shape of the face and is kept, so the face stays three-dimensional. The
+    measured side-to-side light is scaled down as a whole, keeping its shape, in linear
+    light (mostly a reflector on the dark side, a little softer light on the other):
+    gentle directional light (up to 0.15 stops each way) is kept as it is, stronger light
+    is compressed smoothly, and no half ends up more than 0.3 stops off the middle.
+    """
+    if strength <= 0.0 or face.frontalness < 0.35:
+        return img
+    measured = side_light(face, img, regions)
+    if measured is None:
+        return img
+    profile, agree = measured
+    size = float(np.abs(profile).max())
+    if size < 0.12:                                  # within the kept range
+        return img
+    kept = size if size <= 0.15 else 0.15 + 0.15 * (1.0 - float(np.exp(-(size - 0.15) / 0.15)))
+    k = float(np.clip(strength, 0.0, 1.0)) * float(smoothstep(0.35, 0.65, np.float32(face.frontalness)))
+    k *= float(smoothstep(0.5, 0.85, np.float32(agree)))
+    reduce = (1.0 - kept / size) * k                 # the share of the side light taken out
+    iod, shape = face.iod, regions.shape
+    _, _, across = _mirror_maps(face, shape)
+    # the measured light, as a function of the distance from the midline (0 on it)
+    grid = np.concatenate([[0.0], _LIGHT_ACROSS, [1.2]])
+    values = np.concatenate([[0.0], profile, [profile[-1]]])
+    asym = np.sign(across) * np.interp(np.abs(across), grid, values)      # + where brighter
+    # Mostly a reflector on the dark side: three quarters of the evening-out lifts the
+    # shadowed half, a quarter tones down the lit half. Darkening the lit half more
+    # would leave it duller than the lit hair and background around it.
+    total = 2.0 * reduce * asym
+    share = 0.5 - 0.25 * np.tanh(asym / 0.2)        # 0.75 on the dark side, 0.25 on the lit side, smoothly
+    delta = np.clip(-share * total * np.log(2.0), -1.1, 1.1)
+    # The correction fades out well beyond the face outline, so hair and the edge of the
+    # face are lit alike, and below the chin: the neck sits in the jaw's shadow with
+    # light of its own, and splitting it down the middle would leave a stripe.
+    h, w = shape
+    ys, xs = np.mgrid[0:h, 0:w].astype(np.float32)
+    down = ((xs - face.eye_mid[0]) * face.y_axis[0] + (ys - face.eye_mid[1]) * face.y_axis[1]) / iod
+    chin = float(np.dot(face.pt(F.CHIN) - face.eye_mid, face.y_axis)) / iod
+    weight = blur(dilate(regions.face_poly_wide, 0.05 * iod), 0.2 * iod) * (1.0 - smoothstep(chin - 0.25, chin + 0.2, down))
+    gain = np.exp(ops.gaussian(delta * weight, 0.06 * iod))
+    return _to_srgb(_to_linear(img) * gain[..., None])
+
+
+def light_map(img: np.ndarray, regions: FaceRegions) -> tuple[np.ndarray, np.ndarray, float, float]:
+    """The light falling on the face, separated from its features.
+
+    Linear luminance of the skin, averaged over a quarter of the eye distance, is a
+    good estimate of the illumination: skin color barely varies, while the light
+    changes from the lit to the shadowed side. Returns the map, how much skin backs
+    each pixel's estimate, and the 15th / 85th percentiles over the skin.
+    """
+    core = regions.skin
+    y = _to_linear(img) @ ops.LUMA
+    sigma = 0.25 * regions.iod
+    support = ops.gaussian(core, sigma)
+    light = ops.gaussian(y * core, sigma) / np.maximum(support, 1e-4)
+    values = light[core > 0.5]
+    if values.size < 20:
+        values = light[core > 0.1]
+    if values.size < 20:
+        return light, support, 1.0, 1.0
+    low, high = np.percentile(values, [15, 85])
+    return light, support, float(max(low, 1e-4)), float(max(high, 1e-4))
+
+
 def relight(img: np.ndarray, regions: FaceRegions, strength: float = 1.0,
             target_l: float | None = None) -> np.ndarray:
-    """补光: bring a face that is in shade or under colored light back to normal light.
+    """补光: bring a face in shade, under uneven or colored light back to good light.
 
-    A retoucher's first move on a dim, blue-grey face is to lift its exposure and
-    neutralize the cast; makeup put on top of uncorrected shade looks like paint.
-    Well-lit faces are left alone.
+    What a retoucher does, in three parts, all in linear light:
+
+    * Exposure: the *lit* part of the face is brought up to the target lightness. Not
+      the average: a face lit from one side has a dark half that drags the average
+      down, and lifting the whole face by that much turns the lit half white.
+    * Fill light: when one side is much darker than the other, the shadows are lifted
+      far more than the lit areas (a reflector on the dark side), and the hottest
+      areas are eased down a little. The light keeps its direction but loses the
+      half-dark look. Faces in even light get no fill.
+    * Color cast: warm lamps and blue shade are neutralized toward natural skin.
+
+    Gains come from the light map, not from each pixel's own value, so texture and
+    features keep their contrast, and a soft shoulder keeps the lit side from clipping.
     """
     if strength <= 0.0:
         return img
@@ -192,31 +423,45 @@ def relight(img: np.ndarray, regions: FaceRegions, strength: float = 1.0,
     total = float(core.sum())
     if total < 50.0:
         return img
+    k = float(np.clip(strength, 0.0, 1.0))
     lab = ops.to_lab(img)
-    mean = [float((lab[..., c] * core).sum() / total) for c in range(3)]
+    mean_a = float((lab[..., 1] * core).sum() / total)
+    mean_b = float((lab[..., 2] * core).sum() / total)
+
+    def cast_shift(a: float, b: float) -> tuple[float, float]:
+        # (a warm lamp can push skin far toward orange: up to -8 / -16 of correction)
+        return (float(np.clip(0.65 * (NOMINAL_SKIN[1] - a), -8.0, 10.0)),
+                float(np.clip(0.65 * (NOMINAL_SKIN[2] - b), -16.0, 14.0)))
+
+    shift_a, shift_b = cast_shift(mean_a, mean_b)
+
+    light, support, low, high = light_map(img, regions)
     goal = NOMINAL_SKIN[0] if target_l is None else target_l
-    gain = float(np.clip(goal / max(mean[0], 1.0) - 1.0, 0.0, 0.7))
-    shift_a = float(np.clip(0.65 * (NOMINAL_SKIN[1] - mean[1]), -4.0, 10.0))
-    shift_b = float(np.clip(0.65 * (NOMINAL_SKIN[2] - mean[2]), -6.0, 14.0))
-    if gain < 0.03 and abs(shift_a) < 1.5 and abs(shift_b) < 1.5:
+    exposure = float(np.clip(_lstar_to_y(goal) / high, 1.0, 3.0))   # never darkens the face as a whole
+    fill = float(smoothstep(1.6, 3.5, np.float32(high / low)))     # 0 = even light, 1 = strong side light
+    if exposure < 1.02 and fill < 0.02 and abs(shift_a) < 1.5 and abs(shift_b) < 1.5:
         return img
-    w = regions.face_light * float(np.clip(strength, 0.0, 1.0))
-    lab[..., 0] *= 1.0 + gain * w * (1.0 - smoothstep(62.0, 88.0, lab[..., 0]))   # never blow out lit areas
+    gamma = 1.0 - 0.65 * fill
+    rel = np.clip(light / high, 0.03, 2.0)
+    rel = 1.0 + (rel - 1.0) * smoothstep(0.02, 0.15, support)      # no skin nearby: plain exposure
+    gain = exposure * rel ** (gamma - 1.0)
+    w = regions.face_light * k
+    gain = 1.0 + (np.minimum(gain, 4.0 * exposure) - 1.0) * w
+
+    lin = _to_linear(img) * gain[..., None]
+    knee = 0.78                                                     # soft shoulder: lit skin never clips
+    lin = np.where(lin > knee, knee + (1.0 - knee) * (1.0 - np.exp(-(lin - knee) / (1.0 - knee))), lin)
+    out = _to_srgb(lin)
+    # The cast is measured again on the brightened face: brightening strengthens a color
+    # cast as well (a dim orange face becomes a bright, more orange one), so a shift
+    # measured before would fall short.
+    lab = ops.to_lab(out)
+    shift_a, shift_b = cast_shift(float((lab[..., 1] * core).sum() / total), float((lab[..., 2] * core).sum() / total))
+    if abs(shift_a) < 0.5 and abs(shift_b) < 0.5:
+        return out
     lab[..., 1] += shift_a * w
     lab[..., 2] += shift_b * w
-    if gain > 0.15:
-        # A flatly lifted face looks pasted on. Add a soft warm key light from the side
-        # that was already brighter, so the face keeps its shape.
-        face = regions.face
-        h, wd = regions.shape
-        ys, xs = np.mgrid[0:h, 0:wd].astype(np.float32)
-        side = ((xs - face.eye_mid[0]) * face.x_axis[0] + (ys - face.eye_mid[1]) * face.x_axis[1]) / regions.iod
-        left = float((lab[..., 0] * core * (side > 0)).sum() / max(float((core * (side > 0)).sum()), 1.0))
-        right = float((lab[..., 0] * core * (side < 0)).sum() / max(float((core * (side < 0)).sum()), 1.0))
-        key = smoothstep(-0.6, 0.9, side if left >= right else -side) * w * min(1.0, gain / 0.4)
-        lab[..., 0] *= 1.0 + 0.14 * key * (1.0 - smoothstep(62.0, 88.0, lab[..., 0]))
-        lab[..., 2] += 2.5 * key
-    return ops.from_lab_where(img, lab, w)
+    return ops.from_lab_where(out, lab, w)
 
 
 def _masked_blur(x: np.ndarray, weight: np.ndarray, sigma: float) -> np.ndarray:
@@ -483,15 +728,25 @@ def sculpt(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) -> 
     ear_fall = ear_fall * skin * (1.0 - lit)
     lab = ops.to_lab(img)
     lightness = lab[..., 0]
+    # Contour only where there is no shadow yet. Skin that is already darker than the
+    # rest of the face (the far side of a face lit from one side, a jaw in shade) would
+    # turn a dirty grey with more shade on top; a retoucher leaves it alone.
+    total = float(skin.sum())
+    if total > 50.0:
+        typical = float((lightness * skin).sum() / total)
+        already = smoothstep(-15.0, -5.0, ops.gaussian(lightness, 0.06 * iod) - typical)
+        shade, ear_fall, wing = shade * already, ear_fall * already, wing * already
     # tone down the long thin highlight on the middle of the bridge (keep the tip)
     bridge = _bridge_line(face, shape) * skin * (1.0 - np.clip(lit * 2.0, 0.0, 1.0))
     excess = np.clip(lightness - ops.gaussian(lightness, 0.08 * iod), 0.0, None)
     lightness = lightness - excess * bridge * min(1.0, 0.8 * amount)
     # The cheekbones get a restrained light: on a face that is not very bright yet, a
     # strong one turns into two pale patches. Depth comes from the shadows instead.
-    lab[..., 0] = lightness + ((100.0 - lightness) * (0.32 * light + 0.17 * cheek)
-                               - lightness * (0.13 * shade + 0.12 * ear_fall + 0.09 * wing)) * amount
-    lab[..., 1] += 4.0 * wing * amount            # shadows on skin are a little pink, not grey
+    dark = 0.13 * shade + 0.12 * ear_fall + 0.09 * wing
+    lab[..., 0] = lightness + ((100.0 - lightness) * (0.32 * light + 0.17 * cheek) - lightness * dark) * amount
+    # Shadows on skin are a little warmer and pinker, never grey.
+    lab[..., 1] += (4.0 * wing + 12.0 * (0.13 * shade + 0.12 * ear_fall)) * amount
+    lab[..., 2] += 10.0 * (0.13 * shade + 0.12 * ear_fall) * amount
     return ops.from_lab_where(img, lab, np.maximum.reduce([light, cheek, shade, ear_fall, wing, bridge]))
 
 

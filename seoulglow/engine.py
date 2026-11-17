@@ -187,6 +187,33 @@ def _face_lightness(img: np.ndarray, face: Face) -> float:
     return float(np.median(sample)) if sample.size > 20 else float(np.median(lightness))
 
 
+def _balance_faces(img: np.ndarray, faces: list[Face], strength: float) -> np.ndarray:
+    """Even out one-sided light on each face (see skin.balance_light), before anything
+    else measures or brightens it. Done at a modest resolution: the correction is a
+    smooth light field, so it is computed small and applied to the full crop."""
+    if strength <= 0.0:
+        return img
+    for face in faces:
+        x0, y0, x1, y1 = face.roi(img.shape)
+        crop = img[y0:y1, x0:x1]
+        local = face.shifted(-x0, -y0)
+        scale = min(1.0, 120.0 / max(local.iod, 1.0))
+        if scale < 1.0:
+            small = cv2.resize(crop, (max(8, round(crop.shape[1] * scale)), max(8, round(crop.shape[0] * scale))),
+                               interpolation=cv2.INTER_AREA)
+            sface = Face(local.landmarks * np.array([small.shape[1] / crop.shape[1], small.shape[0] / crop.shape[0]]))
+        else:
+            small, sface = crop, local
+        balanced = skin.balance_light(np.ascontiguousarray(small), sface, FaceRegions(small, sface), strength)
+        if balanced is small:
+            continue
+        # the change as a light ratio, upsampled smoothly and applied to the full-size crop
+        ratio = (skin._to_linear(balanced) @ ops.LUMA + 1e-4) / (skin._to_linear(small) @ ops.LUMA + 1e-4)
+        ratio = cv2.resize(ops.gaussian(ratio, 1.0), (crop.shape[1], crop.shape[0]), interpolation=cv2.INTER_CUBIC)
+        img[y0:y1, x0:x1] = skin._to_srgb(skin._to_linear(crop) * np.clip(ratio, 0.3, 3.5)[..., None])
+    return img
+
+
 def _lift_dark_scene(img: np.ndarray, faces: list[Face], strength: float) -> tuple[np.ndarray, float]:
     """补光 for photos taken in the dark.
 
@@ -231,19 +258,20 @@ def _beautify_face(img: np.ndarray, face: Face, p: Params) -> np.ndarray:
                          target_l=float(NOMINAL_SKIN[0]) - 8.0 * p.dark_scene)   # a dark photo stays a little darker
     if relit is not img:   # the skin model must be rebuilt on the corrected colors
         img, regions = relit, FaceRegions(relit, face)
+    lit = img   # the face in corrected light: light and shade (立体) and natural shine are read from this
     img = skin.remove_spots(img, regions, p.smooth)
     img = skin.smooth(img, regions, p.smooth, pr.texture)
     img = skin.even_out(img, regions, p.smooth)
     img = skin.under_eye(img, face, regions, pr.dark_circles * p.cleanup * face.frontalness)
     img = skin.soften_folds(img, face, regions, pr.folds * p.cleanup * face.frontalness)
     img = skin.brighten(img, regions, p.whiten, pr.tone_a * p.tone_scale, pr.tone_b * p.tone_scale)
-    img = skin.relief(img, original, face, regions, pr.relief, boost=1.35, cheeks=0.65)
+    img = skin.relief(img, lit, face, regions, pr.relief, boost=1.35, cheeks=0.65)
     light = _skin_light(img, regions)                     # measure again, after brightening
     dim = float(np.clip(light[0] / 62.0, 0.35, 1.0))     # darkening makeup is eased off on dim faces
     blush_c, brow_c, shadow_c = _adapt(pr.blush_rgb, light), _adapt(pr.brow_rgb, light), _adapt(pr.shadow_rgb, light)
     lip_c = _adapt(p.lip_rgb, light) if p.lip_rgb is not None else None
     img = skin.matte(img, regions, pr.matte * m)
-    img = skin.glass_glow(img, face, regions, pr.glow * m, reference=original)
+    img = skin.glass_glow(img, face, regions, pr.glow * m, reference=lit)
     img = skin.sculpt(img, face, regions, pr.sculpt * m)
     img = makeup.blush(img, face, regions, blush_c, pr.blush * m, pr.blush_height, pr.blush_spread,
                        nose=pr.blush_nose, outward=pr.blush_out)
@@ -263,7 +291,8 @@ def _beautify_face(img: np.ndarray, face: Face, p: Params) -> np.ndarray:
     img = _local(img, face, eyes, 0.35 * iod, lambda s, f, r: makeup.aegyo_sal(s, f, r, pr.aegyo * m))
     img = _local(img, face, eyes, 0.08 * iod, lambda s, f, r: makeup.brighten_eyes(
         s, r, pr.eye_brighten * m, face=f, catchlight=pr.lens <= 0.0))   # the lens step handles catchlights
-    img = _local(img, face, eyes, 0.08 * iod, lambda s, f, r: makeup.iris_lens(s, f, r, pr.lens * m, skin_l=float(light[0])))
+    img = _local(img, face, eyes, 0.08 * iod, lambda s, f, r: makeup.iris_lens(
+        s, f, r, pr.lens * m * (1.0 - 0.5 * p.dark_scene), skin_l=float(light[0])))   # a colored lens looks out of place in lamplight
     # Hair, a hat brim, a dark collar: whatever was dark and is not skin stays dark.
     # Corrections aimed at the face spill onto them as a grey haze otherwise.
     # Not the features, though: in a dim photo the lids, lash lines, lips and nostrils are
@@ -303,7 +332,9 @@ def process(rgb: np.ndarray, preset_id: str | None, adj: Adjustments | None,
     p = resolve(get_preset(preset_id), adj or Adjustments())
     img = to_float(rgb)
     usable = [f for f in faces if f.iod >= MIN_IOD_PX]
-    img, dark_scene = _lift_dark_scene(img, usable, min(1.0, p.whiten / max(p.preset.whiten, 1e-6)))
+    light_strength = min(1.0, p.whiten / max(p.preset.whiten, 1e-6))
+    img = _balance_faces(img, usable, light_strength)          # one-sided light first: everything else reads the face
+    img, dark_scene = _lift_dark_scene(img, usable, light_strength)
     p = replace(p, dark_scene=dark_scene)
 
     for face in usable:  # appearance edits, each inside its own crop

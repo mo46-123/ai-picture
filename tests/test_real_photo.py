@@ -93,3 +93,58 @@ def test_rounder_faces_get_more_slimming_than_oval_ones(analyzer, photo):
     narrow, normal, wide = (reshape.needs(widened(k))[0] for k in (0.85, 1.0, 1.2))
     assert 0.35 <= narrow <= normal <= wide <= 1.0
     assert wide > narrow + 0.2
+
+
+def _lamp_from_one_side(rgb: np.ndarray, face, ev: float = -1.2, ambient: float = 0.18) -> np.ndarray:
+    """The same photo under a lamp to one side: one half of the face lit, the other in shade."""
+    x = rgb.astype(np.float32) / 255.0
+    lin = np.where(x <= 0.04045, x / 12.92, ((x + 0.055) / 1.055) ** 2.4)
+    h, w = x.shape[:2]
+    ys, xs = np.mgrid[0:h, 0:w].astype(np.float32)
+    nose = face.pt(F.NOSE_TIP)
+    s = ((xs - nose[0]) * face.x_axis[0] + (ys - nose[1]) * face.x_axis[1]) / (0.9 * face.iod)
+    key = np.clip(0.5 + 0.5 * s, 0, 1)
+    key = key * key * (3 - 2 * key)
+    lin = lin * (2.0 ** ev) * (ambient + (1 - ambient) * key)[..., None]
+    out = np.where(lin <= 0.0031308, lin * 12.92, 1.055 * np.clip(lin, 0, 1) ** (1 / 2.4) - 0.055)
+    return (np.clip(out, 0, 1) * 255 + 0.5).astype(np.uint8)
+
+
+def _half_gap(rgb: np.ndarray, face) -> float:
+    """Lightness difference between the two cheeks (L*)."""
+    from seoulglow import ops
+    from seoulglow.skin import cheekbone_patch
+
+    lab = ops.to_lab(rgb.astype(np.float32) / 255.0)
+    values = []
+    for side in ("right", "left"):
+        c = cheekbone_patch(face, side)[0]
+        x, y, r = int(c[0]), int(c[1]), max(2, int(0.05 * face.iod))
+        values.append(float(lab[y - r:y + r, x - r:x + r, 0].mean()))
+    return abs(values[0] - values[1])
+
+
+def test_light_from_one_side_is_evened_out(analyzer, photo):
+    from seoulglow.engine import _balance_faces
+
+    face = analyzer.detect(photo)[0]
+    lamp = _lamp_from_one_side(photo, face)
+    faces = analyzer.detect(lamp)
+    assert faces
+    before = _half_gap(lamp, faces[0])
+    assert before > 15.0                                     # the simulation is strongly one-sided
+    balanced = (np.clip(_balance_faces(lamp.astype(np.float32) / 255.0, faces, 1.0), 0, 1) * 255 + 0.5).astype(np.uint8)
+    assert _half_gap(balanced, faces[0]) < 0.6 * before
+
+    # the full pipeline no longer turns the lit half white while the other stays dark
+    out = process(lamp, "glass_skin", Adjustments(), faces)
+    assert _half_gap(out, faces[0]) < before
+
+
+def test_evenly_lit_face_is_not_rebalanced(analyzer, photo):
+    from seoulglow.engine import _balance_faces
+
+    faces = analyzer.detect(photo)
+    img = photo.astype(np.float32) / 255.0
+    balanced = _balance_faces(img.copy(), faces, 1.0)
+    assert float(np.abs(balanced - img).mean()) < 0.01

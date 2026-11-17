@@ -293,6 +293,9 @@ def brighten_eyes(img: np.ndarray, regions: FaceRegions, amount: float, face: Fa
     # lashes dark, otherwise the whole eye turns into a pale smear.
     rescue = float(np.clip(40.0 - mean_l, 0.0, 14.0)) * smoothstep(mean_l - 6.0, mean_l + 12.0, lightness)
     lifted = lightness + ((lightness - mean_l) * 0.35 + 4.0 + rescue) * mask * amount
+    # The whites should look clean, not glowing: what is lifted rolls off above L*86
+    # (but nothing ends darker than it was).
+    lifted = np.maximum(np.where(lifted > 86.0, 86.0 + (lifted - 86.0) * 0.35, lifted), np.minimum(lightness, lifted))
     lab[..., 0] = lifted
     chroma = np.sqrt(a * a + b * b)
     sclera = mask * smoothstep(46.0, 66.0, lifted) * (1.0 - smoothstep(16.0, 34.0, chroma))
