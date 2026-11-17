@@ -14,7 +14,7 @@ from . import face as F
 from .config import Settings, get_settings
 from .face import Face, get_analyzer
 from .imageio import decode_image, encode_jpeg, to_float, to_uint8
-from .masks import FaceRegions, gaussian_ellipse
+from .masks import FaceRegions, gaussian_ellipse, smoothstep
 from .presets import LIP_SHADES, Preset, get_preset
 
 WORK_IOD = 200.0   # faces larger than this (eye distance, px) are retouched at reduced size
@@ -194,6 +194,11 @@ def _beautify_face(img: np.ndarray, face: Face, p: Params) -> np.ndarray:
     img = _local(img, face, eyes, 0.35 * iod, lambda s, f, r: makeup.aegyo_sal(s, f, r, pr.aegyo * m))
     img = _local(img, face, eyes, 0.08 * iod, lambda s, f, r: makeup.brighten_eyes(s, r, pr.eye_brighten * m, face=f))
     img = _local(img, face, eyes, 0.08 * iod, lambda s, f, r: makeup.iris_lens(s, f, r, pr.lens * m))
+    # Hair, a hat brim, a dark collar: whatever was dark and is not skin stays dark.
+    # Corrections aimed at the face spill onto them as a grey haze otherwise.
+    was = ops.luminance(original)
+    dark = (1.0 - smoothstep(0.1, 0.28, was)) * (1.0 - np.clip(regions.skin * 2.0, 0.0, 1.0)) * (1.0 - regions.eyes)
+    img = img + (np.minimum(original, img) - img) * dark[..., None]
     img = _local(img, face, F.LIPS_INNER, 0.06 * iod, lambda s, f, r: makeup.whiten_teeth(
         s, f, r, pr.teeth * min(1.0, m + 0.3)))
     return img

@@ -200,9 +200,11 @@ def eyeliner(img: np.ndarray, face: Face, regions: FaceRegions, amount: float,
     iod, y, shape = face.iod, face.y_axis, regions.shape
     mask = np.zeros(shape, np.float32)
     for side, lid in (("right", F.RIGHT_UPPER_LID), ("left", F.LEFT_UPPER_LID)):
-        pts = face.pts(lid)[:7] - y * 0.004 * iod        # outer three quarters of the lid
+        pts = face.pts(lid) - y * 0.004 * iod             # the whole lash line
         # drop > 0 pulls the tail down (soft "puppy" eye), drop < 0 lifts it (sharper, cooler)
-        end = pts[0] + face.outward(side) * tail * iod + y * drop * iod
+        along = pts[0] - pts[2]                       # the lid's own direction at the outer corner
+        along = along / max(float(np.linalg.norm(along)), 1e-6)
+        end = pts[0] + (0.5 * along + 0.5 * face.outward(side)) * tail * iod + y * drop * iod
         mask = np.maximum(mask, polyline(shape, np.vstack([end[None], pts]), thickness=max(1.0, 0.016 * iod)))
     mask = blur(mask, max(0.5, 0.005 * iod)) * float(np.clip(amount, 0.0, 1.0))
     lab = ops.to_lab(img)
@@ -331,7 +333,7 @@ def iris_lens(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) 
         # the band between pupil and rim is what a colored lens changes
         pupil = np.maximum(pupil, 1.0 - smoothstep(0.26, 0.42, d))
         iris = np.maximum(iris, smoothstep(0.38, 0.6, d) * (1.0 - smoothstep(0.82, 1.0, d)))
-        ring = np.maximum(ring, smoothstep(0.82, 0.96, d) * (1.0 - smoothstep(1.0, 1.12, d)))
+        ring = np.maximum(ring, smoothstep(0.7, 0.98, d) * (1.0 - smoothstep(0.98, 1.2, d)))   # soft rim
         gaussian_ellipse(shape, c + np.array([-0.32, -0.36]) * r, 0.17 * r, 0.17 * r, out=spark)
         gaussian_ellipse(shape, c + np.array([0.36, 0.34]) * r, 0.09 * r, 0.09 * r, out=spark, weight=0.5)
     eye = regions.eyes
@@ -340,7 +342,7 @@ def iris_lens(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) 
     lab = ops.to_lab(img)
     lightness = lab[..., 0]
     # dark irises are lifted toward a mid grey; an iris that is already light is left alone
-    lab[..., 0] = lightness + np.clip(40.0 - lightness, -30.0, 20.0) * iris * 0.7 - np.clip(lightness - 14.0, 0.0, None) * ring * 0.6
+    lab[..., 0] = lightness + np.clip(40.0 - lightness, -30.0, 20.0) * iris * 0.7 - np.clip(lightness - 14.0, 0.0, None) * ring * 0.4
     lab[..., 1] += (-1.0 - lab[..., 1]) * iris * 0.45      # toward a cool grey
     lab[..., 2] += (-9.0 - lab[..., 2]) * iris * 0.45
     weight = np.maximum(iris, ring)

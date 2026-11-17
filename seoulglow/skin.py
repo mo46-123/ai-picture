@@ -306,35 +306,47 @@ def glass_glow(img: np.ndarray, face: Face, regions: FaceRegions, amount: float,
 
 
 def sculpt(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) -> np.ndarray:
-    """修容高光: broad soft light on the center of the face (forehead, nose bridge, under
-    the eyes, chin) and a little shade along the jaw and the sides of the nose, so
-    the face reads as smaller and more three-dimensional."""
+    """修容高光: shape the face with light instead of brightening it evenly.
+
+    Light falls on the cheekbones (one soft streak each) and the tip of the nose, with
+    a little on the bridge. From the cheekbone the skin darkens gradually toward the
+    side of the face, and the nose wings and the jaw keep a soft shadow, so the face
+    stays three-dimensional under very fair skin.
+    """
     if amount <= 0.0:
         return img
     iod, shape, ang, y = face.iod, regions.shape, face.angle_deg, face.y_axis
     light = np.zeros(shape, np.float32)
     shade = np.zeros(shape, np.float32)
-    bridge = (face.pt(6) + face.pt(195)) / 2.0
-    gaussian_ellipse(shape, bridge, 0.045 * iod, 0.22 * iod, ang, out=light, weight=1.0)
-    gaussian_ellipse(shape, face.brow_mid - y * 0.3 * iod, 0.22 * iod, 0.14 * iod, ang, out=light, weight=0.7)
-    gaussian_ellipse(shape, face.pt(152) - y * 0.16 * iod, 0.1 * iod, 0.07 * iod, ang, out=light, weight=0.7)
+    tip = face.pt(F.NOSE_TIP)
+    gaussian_ellipse(shape, tip - y * 0.02 * iod, 0.05 * iod, 0.045 * iod, ang, out=light, weight=1.0)
+    gaussian_ellipse(shape, (face.pt(6) + face.pt(195)) / 2.0, 0.025 * iod, 0.16 * iod, ang, out=light, weight=0.5)
     for side in ("right", "left"):
         out = face.outward(side)
-        c = face.eye_center(side) + y * 0.36 * iod + out * 0.08 * iod      # under-eye triangle
-        gaussian_ellipse(shape, c, 0.2 * iod, 0.12 * iod, ang, out=light, weight=0.9)
-        gaussian_ellipse(shape, bridge + y * 0.08 * iod + out * 0.115 * iod, 0.03 * iod, 0.17 * iod, ang,
-                         out=shade, weight=0.7)
-    for index in (172, 397, 136, 365):                                     # along the jaw
+        cheekbone = face.eye_center(side) + y * 0.38 * iod + out * 0.2 * iod
+        tilt = ang + (-20.0 if side == "left" else 20.0)
+        gaussian_ellipse(shape, cheekbone, 0.17 * iod, 0.06 * iod, tilt, out=light, weight=1.0)
+        gaussian_ellipse(shape, tip + out * 0.17 * iod + y * 0.0 * iod, 0.04 * iod, 0.06 * iod, ang,
+                         out=shade, weight=0.8)                                  # nose wing
+    for index in (172, 397, 136, 365, 150, 379):                                 # along the jaw
         jaw = face.pt(index)
-        inward = face.pt(F.NOSE_TIP) - jaw
-        jaw = jaw + inward / max(float(np.linalg.norm(inward)), 1e-6) * 0.06 * iod
-        gaussian_ellipse(shape, jaw, 0.13 * iod, 0.13 * iod, ang, out=shade, weight=0.8)
+        inward = tip - jaw
+        jaw = jaw + inward / max(float(np.linalg.norm(inward)), 1e-6) * 0.05 * iod
+        gaussian_ellipse(shape, jaw, 0.11 * iod, 0.11 * iod, ang, out=shade, weight=0.8)
+    # falloff toward the side of the face, below the eye line
+    inside = (regions.face_poly > 0.5).astype(np.uint8)
+    depth = cv2.distanceTransform(inside, cv2.DIST_L2, 3) / max(iod, 1.0)
+    h, w = shape
+    ys, xs = np.mgrid[0:h, 0:w].astype(np.float32)
+    below = ((xs - face.eye_mid[0]) * y[0] + (ys - face.eye_mid[1]) * y[1]) / max(iod, 1.0)
+    side_fall = (1.0 - smoothstep(0.0, 0.3, depth)) * smoothstep(-0.1, 0.35, below)
+    shade = np.maximum(np.clip(shade, 0.0, 1.0), side_fall)
     skin = regions.skin
     light = np.clip(light, 0.0, 1.0) * skin
-    shade = np.clip(shade, 0.0, 1.0) * skin * (1.0 - light)
+    shade = shade * skin * (1.0 - light)
     lab = ops.to_lab(img)
     lightness = lab[..., 0]
-    lab[..., 0] = lightness + ((100.0 - lightness) * 0.1 * light - lightness * 0.035 * shade) * amount
+    lab[..., 0] = lightness + ((100.0 - lightness) * 0.3 * light - lightness * 0.075 * shade) * amount
     return ops.from_lab_where(img, lab, np.maximum(light, shade))
 
 

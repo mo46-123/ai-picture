@@ -37,7 +37,8 @@ def test_grades_stay_in_range_and_brighten(preset_id):
     out = apply_grade(img, PRESETS[preset_id].grade)
     assert out.shape == img.shape and out.dtype == np.float32
     assert 0.0 <= out.min() and out.max() <= 1.0
-    assert out.mean() > img.mean()  # every Korean look is brighter than the input
+    bright = img.mean(axis=2) > 0.45   # skin-range tones get brighter; blacks may be deepened on purpose
+    assert out[bright].mean() > img[bright].mean()
 
 
 def test_temperature_direction():
