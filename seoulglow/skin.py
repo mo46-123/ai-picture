@@ -77,6 +77,37 @@ def smooth(img: np.ndarray, regions: FaceRegions, strength: float, texture_keep:
     return np.clip(ops.lerp(img, smoothed, weight), 0.0, 1.0)
 
 
+def even_out(img: np.ndarray, regions: FaceRegions, strength: float) -> np.ndarray:
+    """匀肤: what a retoucher does for acne and acne scars.
+
+    * Color: redness is a chroma problem, so a*/b* are pulled toward their local
+      average over the skin. Breakouts lose their red without touching texture.
+    * Relief: pimples and pits are bumps a few percent of the eye distance wide. That
+      band of the lightness is turned down (inverted high-pass), while pores (finer)
+      and the face's shading (broader) are left alone.
+    """
+    if strength <= 0.0:
+        return img
+    iod = regions.iod
+    w = regions.skin * float(np.clip(strength, 0.0, 1.0))
+    if float(w.sum()) < 20.0:
+        return img
+    lab = ops.to_lab(img)
+    sigma = 0.1 * iod
+    norm = np.maximum(ops.gaussian(regions.skin, sigma), 1e-3)
+    for c in (1, 2):
+        local = ops.gaussian(lab[..., c] * regions.skin, sigma) / norm
+        lab[..., c] += (local - lab[..., c]) * w * 0.85
+    lightness = lab[..., 0]
+    band = ops.gaussian(lightness, max(0.8, 0.012 * iod)) - ops.gaussian(lightness, 0.07 * iod)
+    lab[..., 0] = lightness - np.clip(band, -12.0, 12.0) * w * 0.6
+    # Small dark dots (blackheads, tiny scabs, pit shadows) are finer than that band.
+    # Only their dark side is filled in, so the bright sparkle of pores survives.
+    dots = np.clip(lab[..., 0] - ops.gaussian(lab[..., 0], max(0.8, 0.012 * iod)), -15.0, 0.0)
+    lab[..., 0] -= dots * w * 0.8
+    return ops.from_lab_where(img, lab, w)
+
+
 def _cheek_reference(lab: np.ndarray, face: Face, regions: FaceRegions) -> tuple[float, float, float] | None:
     """Mean Lab of clean cheek skin, the target that under-eye skin is lifted toward."""
     iod = face.iod
@@ -168,7 +199,7 @@ def relight(img: np.ndarray, regions: FaceRegions, strength: float = 1.0) -> np.
     if gain < 0.03 and abs(shift_a) < 1.5 and abs(shift_b) < 1.5:
         return img
     w = regions.face_light * float(np.clip(strength, 0.0, 1.0))
-    lab[..., 0] *= 1.0 + gain * w
+    lab[..., 0] *= 1.0 + gain * w * (1.0 - smoothstep(62.0, 88.0, lab[..., 0]))   # never blow out lit areas
     lab[..., 1] += shift_a * w
     lab[..., 2] += shift_b * w
     if gain > 0.15:
@@ -181,7 +212,7 @@ def relight(img: np.ndarray, regions: FaceRegions, strength: float = 1.0) -> np.
         left = float((lab[..., 0] * core * (side > 0)).sum() / max(float((core * (side > 0)).sum()), 1.0))
         right = float((lab[..., 0] * core * (side < 0)).sum() / max(float((core * (side < 0)).sum()), 1.0))
         key = smoothstep(-0.6, 0.9, side if left >= right else -side) * w * min(1.0, gain / 0.4)
-        lab[..., 0] *= 1.0 + 0.14 * key
+        lab[..., 0] *= 1.0 + 0.14 * key * (1.0 - smoothstep(62.0, 88.0, lab[..., 0]))
         lab[..., 2] += 2.5 * key
     return ops.from_lab_where(img, lab, w)
 

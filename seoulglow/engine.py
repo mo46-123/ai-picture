@@ -165,6 +165,7 @@ def _beautify_face(img: np.ndarray, face: Face, p: Params) -> np.ndarray:
         img, regions = relit, FaceRegions(relit, face)
     img = skin.remove_spots(img, regions, p.smooth)
     img = skin.smooth(img, regions, p.smooth, pr.texture)
+    img = skin.even_out(img, regions, p.smooth)
     img = skin.under_eye(img, face, regions, pr.dark_circles * p.cleanup * face.frontalness)
     img = skin.soften_folds(img, face, regions, pr.folds * p.cleanup * face.frontalness)
     img = skin.brighten(img, regions, p.whiten, pr.tone_a * p.tone_scale, pr.tone_b * p.tone_scale)
@@ -243,7 +244,7 @@ def process(rgb: np.ndarray, preset_id: str | None, adj: Adjustments | None,
         fx0, fy0, fx1, fy1 = face.bbox
         feather = gaussian_ellipse(crop.shape[:2], np.array([(fx0 + fx1) / 2 - x0, (fy0 + fy1) / 2 - y0]),
                                    0.45 * (fx1 - fx0), 0.45 * (fy1 - fy0), face.angle_deg)
-        sharp = ops.unsharp(crop, max(0.7, 0.012 * face.iod), 0.5 * min(1.0, face.iod / 140.0))
+        sharp = ops.unsharp(crop, max(0.7, 0.012 * face.iod), 0.3 * min(1.0, face.iod / 140.0))
         img[y0:y1, x0:x1] = crop + (sharp - crop) * np.clip(feather * 1.4, 0.0, 1.0)[..., None]
     return to_uint8(img)
 

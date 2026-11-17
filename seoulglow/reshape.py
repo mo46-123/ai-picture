@@ -99,7 +99,7 @@ def slim_face(img: np.ndarray, face: Face, strength: float) -> np.ndarray:
     for index in F.SLIM_ANCHORS:  # keep the inner face still
         centers.append(face.pt(index))
         shifts.append(np.zeros(2))
-    sigma = 0.28 * iod
+    sigma = 0.36 * iod     # wide and smooth: the whole lower face moves together, no kinks
     bx0, by0, bx1, by1 = face.bbox
     pad = 3.0 * sigma
     h, w = img.shape[:2]

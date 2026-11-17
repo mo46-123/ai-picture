@@ -277,7 +277,12 @@ class FaceRegions:
         inv = np.linalg.inv(cov).astype(np.float32)
         d2 = (diff[..., 0] ** 2 * inv[0, 0] + 2 * diff[..., 0] * diff[..., 1] * inv[0, 1]
               + diff[..., 1] ** 2 * inv[1, 1])
-        return d2, y
+        # Redder-than-average skin (acne, flush, irritation) is still skin: deviations
+        # toward red count far less, otherwise breakouts drop out of the mask and are
+        # the one area that never gets retouched.
+        red = np.where(diff[..., 0] > 0, diff[..., 0] * 0.35, diff[..., 0])
+        d2_red = red ** 2 * inv[0, 0] + 2 * red * diff[..., 1] * inv[0, 1] + diff[..., 1] ** 2 * inv[1, 1]
+        return np.minimum(d2, d2_red), y
 
     def _probability(self, tolerance: float) -> np.ndarray:
         d2, y = self._skin_distance

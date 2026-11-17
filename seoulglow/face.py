@@ -55,15 +55,17 @@ RIGHT_FACE_EDGE, LEFT_FACE_EDGE = 234, 454
 
 # Face-slimming contour: (landmark, inward share, upward share) of the slimming shift.
 # Jaw corners move in the most (V-line); the chin moves up a little (small face).
-JAW_CONTOUR_RIGHT = [(234, 0.15, 0.0), (93, 0.45, 0.0), (132, 0.75, 0.05), (58, 0.95, 0.15),
-                     (172, 1.00, 0.30), (136, 0.85, 0.40), (150, 0.60, 0.45), (149, 0.35, 0.45),
-                     (176, 0.15, 0.45), (148, 0.05, 0.45)]
-JAW_CONTOUR_LEFT = [(454, 0.15, 0.0), (323, 0.45, 0.0), (361, 0.75, 0.05), (288, 0.95, 0.15),
-                    (397, 1.00, 0.30), (365, 0.85, 0.40), (379, 0.60, 0.45), (378, 0.35, 0.45),
-                    (400, 0.15, 0.45), (377, 0.05, 0.45)]
-CHIN_LIFT = [(152, 0.0, 0.45)]
-# Zero-shift anchors so the warp never drags the eyes, nose or mouth.
-SLIM_ANCHORS = [4, 1, 6, 168, 61, 291, 0, 17, 33, 133, 263, 362, 10, 151]
+JAW_CONTOUR_RIGHT = [(234, 0.30, 0.0), (93, 0.55, 0.0), (132, 0.80, 0.0), (58, 0.95, 0.05),
+                     (172, 1.00, 0.12), (136, 0.90, 0.18), (150, 0.70, 0.22), (149, 0.48, 0.24),
+                     (176, 0.28, 0.25), (148, 0.12, 0.25)]
+JAW_CONTOUR_LEFT = [(454, 0.30, 0.0), (323, 0.55, 0.0), (361, 0.80, 0.0), (288, 0.95, 0.05),
+                    (397, 1.00, 0.12), (365, 0.90, 0.18), (379, 0.70, 0.22), (378, 0.48, 0.24),
+                    (400, 0.28, 0.25), (377, 0.12, 0.25)]
+CHIN_LIFT = [(152, 0.0, 0.25)]
+# Zero-shift anchors so the warp never drags the eyes, nose or mouth. The mouth corners
+# are deliberately not anchors: they sit close to the jaw and pinning them leaves a
+# bulge in the contour right beside the chin.
+SLIM_ANCHORS = [4, 1, 6, 168, 0, 17, 33, 133, 263, 362, 10, 151]
 NECK_TOP = [172, 136, 150, 149, 176, 148, 152, 377, 400, 378, 379, 365, 397]
 
 MIN_LANDMARKS = 468
