@@ -224,15 +224,23 @@ def brighten(img: np.ndarray, regions: FaceRegions, amount: float,
         return img
     mask = regions.skin_wide
     lab = ops.to_lab(img)
-    # The skin mask stops short of the brows. Left alone, the skin between and around
-    # the brow hairs keeps the photo's old color and shows as a yellow-brown patch on
-    # the newly fair face, so everything there that is not dark hair is toned as well.
+    # One complexion for the whole face. The color model drops whatever is not typical
+    # skin (around the brows, the ears, a shaded jaw); left alone, those parts keep the
+    # photo's old color and show as yellow-brown patches next to the newly fair skin.
+    # So everything on the face that is not dark hair, an eye or the lips is included.
     face = regions.face
-    brow = np.maximum(fill_poly(regions.shape, face.pts(F.RIGHT_BROW)), fill_poly(regions.shape, face.pts(F.LEFT_BROW)))
-    brow = blur(cv2.dilate(brow, np.ones((3, 3), np.uint8), iterations=max(1, int(0.05 * face.iod))), 0.03 * face.iod)
     total = float(regions.skin.sum())
     skin_l = float((lab[..., 0] * regions.skin).sum() / total) if total > 1.0 else 60.0
-    mask = np.maximum(mask, brow * regions.face_poly * smoothstep(skin_l - 34.0, skin_l - 16.0, lab[..., 0]))
+    not_hair = smoothstep(skin_l - 36.0, skin_l - 14.0, ops.gaussian(lab[..., 0], 0.02 * face.iod))
+    keep_out = blur(np.maximum(regions.eyes, regions.lips_outer), 0.012 * face.iod)
+    mask = np.maximum(mask, regions.face_light * not_hair * (1.0 - np.clip(keep_out * 1.5, 0.0, 1.0)))
+    if total > 1.0:
+        # 肤色统一: pull every part of the face toward the same hue, so redness, sallow
+        # corners and colored shadows stop reading as separate patches.
+        unify = 0.5 * mask * float(np.clip(amount / 0.5, 0.0, 1.0))
+        for c in (1, 2):
+            mean_c = float((lab[..., c] * regions.skin).sum() / total)
+            lab[..., c] += (mean_c - lab[..., c]) * unify
     lightness = lab[..., 0] / 100.0
     if amount > 0.0:
         # Gentle on purpose: real Korean retouching brightens skin a few L* units,
@@ -271,19 +279,19 @@ def glass_glow(img: np.ndarray, face: Face, regions: FaceRegions, amount: float,
     # 2) placed specular spots (tight cores)
     spots = np.zeros(shape, np.float32)
     bridge = (face.pt(6) + face.pt(197) + face.pt(195)) / 3.0
-    gaussian_ellipse(shape, bridge, 0.022 * iod, 0.13 * iod, ang, out=spots, weight=1.0)
+    gaussian_ellipse(shape, bridge, 0.02 * iod, 0.15 * iod, ang, out=spots, weight=1.0)
     gaussian_ellipse(shape, face.pt(F.NOSE_TIP) - y * 0.03 * iod, 0.035 * iod, 0.03 * iod, ang, out=spots, weight=0.9)
     for side in ("right", "left"):
         c = face.eye_center(side) + y * 0.33 * iod + face.outward(side) * 0.2 * iod
         tilt = ang + (-22.0 if side == "left" else 22.0)
-        gaussian_ellipse(shape, c, 0.11 * iod, 0.04 * iod, tilt, out=spots, weight=0.9)
+        gaussian_ellipse(shape, c, 0.13 * iod, 0.05 * iod, tilt, out=spots, weight=1.0)
     gaussian_ellipse(shape, face.brow_mid - y * 0.36 * iod, 0.13 * iod, 0.05 * iod, ang, out=spots, weight=0.6)
     gaussian_ellipse(shape, face.pt(152) - y * 0.17 * iod, 0.06 * iod, 0.03 * iod, ang, out=spots, weight=0.5)
     gaussian_ellipse(shape, face.pt(0) - y * 0.035 * iod, 0.035 * iod, 0.014 * iod, ang, out=spots, weight=0.6)
     # Shine needs light to reflect: spots stay faint on skin that is in shadow.
     spots = np.clip(spots, 0.0, 1.0) ** 1.5 * skin * smoothstep(0.3, 0.75, lum)
 
-    shine = natural * (2.2 * amount) + spots * (0.3 * amount)
+    shine = natural * (2.2 * amount) + spots * (0.42 * amount)
     tint = np.array([1.0, 0.985, 0.97], np.float32)
     out = ops.screen(img, np.clip(shine, 0.0, 0.6)[..., None] * tint)
 
@@ -322,7 +330,7 @@ def sculpt(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) -> 
     shade = np.clip(shade, 0.0, 1.0) * skin * (1.0 - light)
     lab = ops.to_lab(img)
     lightness = lab[..., 0]
-    lab[..., 0] = lightness + ((100.0 - lightness) * 0.2 * light - lightness * 0.07 * shade) * amount
+    lab[..., 0] = lightness + ((100.0 - lightness) * 0.1 * light - lightness * 0.035 * shade) * amount
     return ops.from_lab_where(img, lab, np.maximum(light, shade))
 
 

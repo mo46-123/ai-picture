@@ -109,7 +109,7 @@ def blush(img: np.ndarray, face: Face, regions: FaceRegions, color: tuple[int, i
     if total > 1.0:
         cheek_a = float((lab[..., 1] * weight).sum() / total)
         weight = weight * float(np.clip((float(target[1]) - cheek_a) / 14.0, 0.25, 1.0))
-    w = weight * 0.46  # a diffused flush; much stronger reads as a rash on real photos
+    w = weight * 0.36  # a diffused flush; much stronger reads as a rash on real photos
     lab[..., 1] += (target[1] - lab[..., 1]) * w
     lab[..., 2] += (target[2] - lab[..., 2]) * w
     lab[..., 0] += (target[0] - lab[..., 0]) * w * 0.15
@@ -223,19 +223,12 @@ def lashes(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) -> 
             for t in (0.0, 0.5):
                 base = pts[i] * (1 - t) + pts[i + 1] * t
                 lean = max(0.0, 1.0 - (i + t) / 4.0)     # outer lashes sweep outward
-                tip = base + (up * (0.062 - 0.012 * (i + t) / 5.0) + out * 0.04 * lean) * iod
+                tip = base + (up * (0.054 - 0.012 * (i + t) / 5.0) + out * 0.035 * lean) * iod
                 cv2.line(canvas, tuple(np.round(base * 4).astype(int)), tuple(np.round(tip * 4).astype(int)),
                          255, 1, cv2.LINE_AA, shift=2)
-        low = face.pts(F.RIGHT_EYE_LOWER_LID if side == "right" else F.LEFT_EYE_LOWER_LID)
-        ordered = low if np.linalg.norm(low[0] - pts[0]) < np.linalg.norm(low[-1] - pts[0]) else low[::-1]
-        for i in range(min(4, len(ordered) - 1)):        # a few short lower lashes at the outer half
-            base = (ordered[i] + ordered[i + 1]) / 2.0
-            tip = base + (-up * 0.022 + out * 0.012) * iod
-            cv2.line(canvas, tuple(np.round(base * 4).astype(int)), tuple(np.round(tip * 4).astype(int)),
-                     150, 1, cv2.LINE_AA, shift=2)
     mask = canvas.astype(np.float32) / 255.0 * float(np.clip(amount, 0.0, 1.0))
     lab = ops.to_lab(img)
-    lab[..., 0] -= np.clip(lab[..., 0] - 10.0, 0.0, None) * mask * 0.7
+    lab[..., 0] -= np.clip(lab[..., 0] - 10.0, 0.0, None) * mask * 0.6
     lab[..., 1] *= 1.0 - 0.5 * mask
     lab[..., 2] *= 1.0 - 0.5 * mask
     return ops.from_lab_where(img, lab, mask)
@@ -283,9 +276,9 @@ def brighten_eyes(img: np.ndarray, regions: FaceRegions, amount: float, face: Fa
     lifted = lightness + ((lightness - mean_l) * 0.35 + 4.0 + rescue) * mask * amount
     lab[..., 0] = lifted
     chroma = np.sqrt(a * a + b * b)
-    sclera = mask * smoothstep(50.0, 72.0, lifted) * (1.0 - smoothstep(10.0, 26.0, chroma))
-    lab[..., 1] = a * (1.0 - 0.5 * sclera * amount)
-    lab[..., 2] = b * (1.0 - 0.5 * sclera * amount)
+    sclera = mask * smoothstep(46.0, 66.0, lifted) * (1.0 - smoothstep(16.0, 34.0, chroma))
+    lab[..., 1] = a * (1.0 - 0.8 * sclera * min(1.0, amount))
+    lab[..., 2] = b * (1.0 - 0.8 * sclera * min(1.0, amount))
     out = ops.from_lab_where(img, lab, mask)
     if face is not None and face.landmarks.shape[0] >= 478:        # iris centers: 468 (right), 473 (left)
         spark = np.zeros(regions.shape, np.float32)
@@ -343,7 +336,7 @@ def iris_lens(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) 
     lab = ops.to_lab(img)
     lightness = lab[..., 0]
     # dark irises are lifted toward a mid grey; an iris that is already light is left alone
-    lab[..., 0] = lightness + np.clip(44.0 - lightness, -16.0, 22.0) * iris * 0.6 - np.clip(lightness - 14.0, 0.0, None) * ring * 0.6
+    lab[..., 0] = lightness + np.clip(40.0 - lightness, -30.0, 20.0) * iris * 0.7 - np.clip(lightness - 14.0, 0.0, None) * ring * 0.6
     lab[..., 1] += (-1.0 - lab[..., 1]) * iris * 0.45      # toward a cool grey
     lab[..., 2] += (-9.0 - lab[..., 2]) * iris * 0.45
     weight = np.maximum(iris, ring)

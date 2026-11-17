@@ -177,7 +177,7 @@ def enlarge_iris(img: np.ndarray, face: Face, strength: float) -> np.ndarray:
     for center, edge in ((468, 469), (473, 474)):
         r = float(np.linalg.norm(face.pt(center) - face.pt(edge)))
         if r >= 4.0:
-            img = scale_warp(img, face.pt(center), 1.9 * r, 0.17 * float(np.clip(strength, 0.0, 1.5)))
+            img = scale_warp(img, face.pt(center), 1.9 * r, 0.12 * float(np.clip(strength, 0.0, 1.5)))
     return img
 
 
