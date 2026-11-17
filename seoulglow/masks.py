@@ -313,6 +313,7 @@ class FaceRegions:
         inside = blur(self.face_poly, 0.05 * self.iod)
         around = blur(np.maximum(self.face_poly_wide, self.neck_long), 0.15 * self.iod)
         around = around * np.clip(self.skin_probability_loose * 1.3, 0.0, 1.0)
+        around = blur(around, 0.08 * self.iod)      # no hard edge where the color model stops (collar, hair)
         return np.clip(np.maximum(inside, around), 0.0, 1.0).astype(np.float32)
 
     @cached_property

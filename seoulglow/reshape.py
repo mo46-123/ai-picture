@@ -148,3 +148,11 @@ def enlarge_eyes(img: np.ndarray, face: Face, strength: float) -> np.ndarray:
         radius = 0.95 * face.eye_width(side)
         img = scale_warp(img, face.eye_center(side), radius, amount)
     return img
+
+
+def plump_lips(img: np.ndarray, face: Face, strength: float) -> np.ndarray:
+    """丰唇: a gentle magnification centered on the mouth."""
+    if strength <= 0.0:
+        return img
+    center = (face.pt(F.MOUTH_RIGHT) + face.pt(F.MOUTH_LEFT) + face.pt(F.UPPER_LIP_TOP) + face.pt(F.LOWER_LIP_BOTTOM)) / 4.0
+    return scale_warp(img, center, 0.75 * face.mouth_width, 0.16 * float(np.clip(strength, 0.0, 1.5)))

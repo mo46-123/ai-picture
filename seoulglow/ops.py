@@ -78,3 +78,12 @@ def gaussian(img: np.ndarray, sigma: float) -> np.ndarray:
     small = cv2.resize(img, (sw, sh), interpolation=cv2.INTER_AREA)
     small = cv2.GaussianBlur(small, (0, 0), sigmaX=sigma / factor, sigmaY=sigma / factor)
     return cv2.resize(small, (w, h), interpolation=cv2.INTER_LINEAR)
+
+
+def unsharp(img: np.ndarray, sigma: float, amount: float, threshold: float = 0.012) -> np.ndarray:
+    """Unsharp mask that ignores tiny differences, so noise and JPEG blocks aren't amplified."""
+    if amount <= 0.0:
+        return img
+    detail = img - gaussian(img, sigma)
+    strength = np.clip(np.abs(detail).max(axis=-1, keepdims=True) / threshold - 1.0, 0.0, 1.0)
+    return np.clip(img + detail * strength * amount, 0.0, 1.0)

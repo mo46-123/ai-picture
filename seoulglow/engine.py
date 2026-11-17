@@ -14,7 +14,7 @@ from . import face as F
 from .config import Settings, get_settings
 from .face import Face, get_analyzer
 from .imageio import decode_image, encode_jpeg, to_float, to_uint8
-from .masks import FaceRegions
+from .masks import FaceRegions, gaussian_ellipse
 from .presets import LIP_SHADES, Preset, get_preset
 
 WORK_IOD = 200.0   # faces larger than this (eye distance, px) are retouched at reduced size
@@ -185,6 +185,7 @@ def _beautify_face(img: np.ndarray, face: Face, p: Params) -> np.ndarray:
         s, f, r, shadow_c, pr.shadow * m * dim, outer=pr.shadow_outer))
     img = _local(img, face, eyes, 0.12 * iod, lambda s, f, r: makeup.eyeliner(
         s, f, r, pr.liner * m * dim, tail=pr.liner_tail, drop=pr.liner_drop))
+    img = _local(img, face, eyes, 0.15 * iod, lambda s, f, r: makeup.lashes(s, f, r, pr.lash * m * dim))
     if p.lip_rgb is not None:
         img = _local(img, face, F.LIPS_OUTER, 0.15 * iod, lambda s, f, r: makeup.lips(
             s, f, r, lip_c, pr.lip_intensity * m, pr.lip_gradient, pr.lip_gloss * m))
@@ -227,8 +228,23 @@ def process(rgb: np.ndarray, preset_id: str | None, adj: Adjustments | None,
         img = reshape.slim_face(img, face, p.slim * k)
         img = reshape.slim_nose(img, face, p.nose * k)
         img = reshape.enlarge_eyes(img, face, p.eyes * k)
+        img = reshape.plump_lips(img, face, p.preset.lip_plump * min(1.0, p.makeup / max(p.preset.default_makeup, 1e-6)) * k)
 
     img = color.apply_grade(img, p.preset.grade, p.filter)
+    # Retouching and the soft grade cost a little crispness; give it back. Faces get a
+    # second, finer pass (feathered, so no visible box) to make eyes, brows and lips crisp.
+    h, w = img.shape[:2]
+    img = ops.unsharp(img, max(0.8, 0.0011 * max(h, w)), 0.35 * p.filter)
+    for face in usable:
+        x0, y0, x1, y1 = face.roi(img.shape, margin=0.2)
+        if x1 - x0 < 8 or y1 - y0 < 8:
+            continue
+        crop = np.ascontiguousarray(img[y0:y1, x0:x1])
+        fx0, fy0, fx1, fy1 = face.bbox
+        feather = gaussian_ellipse(crop.shape[:2], np.array([(fx0 + fx1) / 2 - x0, (fy0 + fy1) / 2 - y0]),
+                                   0.45 * (fx1 - fx0), 0.45 * (fy1 - fy0), face.angle_deg)
+        sharp = ops.unsharp(crop, max(0.7, 0.012 * face.iod), 0.5 * min(1.0, face.iod / 140.0))
+        img[y0:y1, x0:x1] = crop + (sharp - crop) * np.clip(feather * 1.4, 0.0, 1.0)[..., None]
     return to_uint8(img)
 
 

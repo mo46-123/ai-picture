@@ -39,14 +39,14 @@ def lips(img: np.ndarray, face: Face, regions: FaceRegions, color: tuple[int, in
     mean_l = float((lightness * mask).sum() / max(float(mask.sum()), 1e-6))
     # A tint, not paint. Real lipstick is darker and less saturated where the lip is in
     # shadow, so the target chroma follows each pixel's own lightness.
-    shade = np.clip(lightness / max(float(target[0]), 1.0), 0.4, 1.1)
+    shade = np.clip(lightness / max(float(target[0]), 1.0), 0.4, 1.1) ** 1.5   # dark lips take less color
     lab[..., 1] += (target[1] * shade - lab[..., 1]) * weight * 0.72
     lab[..., 2] += (target[2] * shade - lab[..., 2]) * weight * 0.72
     # Never lighten: lifting lip lightness toward a pale shade makes lips look chalky white.
     # Darken toward the shade freely, but lighten only lips that are much darker than it
     # (lips in shadow) and never by much: lifting normal lips makes them chalky.
     gap = float(target[0]) - mean_l
-    lab[..., 0] += (gap * 0.3 if gap < 0.0 else min(max(gap - 8.0, 0.0) * 0.5, 9.0)) * weight
+    lab[..., 0] += (gap * 0.3 if gap < 0.0 else min(max(gap - 8.0, 0.0) * 0.6, 13.0)) * weight
     out = ops.from_lab_where(img, lab, weight)
 
     if gloss > 0.0:
@@ -204,6 +204,32 @@ def eyeliner(img: np.ndarray, face: Face, regions: FaceRegions, amount: float,
     return ops.from_lab_where(img, lab, mask)
 
 
+def lashes(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) -> np.ndarray:
+    """睫毛: short fine strokes fanning out from the outer two thirds of the upper lash line."""
+    iod = face.iod
+    if amount <= 0.0 or iod < 90.0:       # too few pixels to draw individual lashes
+        return img
+    shape = regions.shape
+    canvas = np.zeros(shape, np.uint8)
+    up = -face.y_axis
+    for side, lid in (("right", F.RIGHT_UPPER_LID), ("left", F.LEFT_UPPER_LID)):
+        pts = face.pts(lid)[:6]                          # outer corner → past the middle
+        out = face.outward(side)
+        for i in range(len(pts) - 1):
+            for t in (0.0, 0.5):
+                base = pts[i] * (1 - t) + pts[i + 1] * t
+                lean = max(0.0, 1.0 - (i + t) / 4.0)     # outer lashes sweep outward
+                tip = base + (up * (0.045 - 0.008 * (i + t) / 5.0) + out * 0.03 * lean) * iod
+                cv2.line(canvas, tuple(np.round(base * 4).astype(int)), tuple(np.round(tip * 4).astype(int)),
+                         255, 1, cv2.LINE_AA, shift=2)
+    mask = canvas.astype(np.float32) / 255.0 * float(np.clip(amount, 0.0, 1.0))
+    lab = ops.to_lab(img)
+    lab[..., 0] -= np.clip(lab[..., 0] - 10.0, 0.0, None) * mask * 0.7
+    lab[..., 1] *= 1.0 - 0.5 * mask
+    lab[..., 2] *= 1.0 - 0.5 * mask
+    return ops.from_lab_where(img, lab, mask)
+
+
 def aegyo_sal(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) -> np.ndarray:
     """卧蚕: a soft highlight band under the lower lash line plus a faint crease below."""
     if amount <= 0.0:
@@ -240,7 +266,9 @@ def brighten_eyes(img: np.ndarray, regions: FaceRegions, amount: float, face: Fa
     lab = ops.to_lab(img)
     lightness, a, b = lab[..., 0], lab[..., 1], lab[..., 2]
     mean_l = float((lightness * mask).sum() / max(float(mask.sum()), 1e-6))
-    rescue = float(np.clip(42.0 - mean_l, 0.0, 22.0))              # extra lift for eyes lost in shadow
+    # Eyes lost in shadow: lift the lighter parts (whites, iris) but leave pupils and
+    # lashes dark, otherwise the whole eye turns into a pale smear.
+    rescue = float(np.clip(40.0 - mean_l, 0.0, 14.0)) * smoothstep(mean_l - 6.0, mean_l + 12.0, lightness)
     lifted = lightness + ((lightness - mean_l) * 0.35 + 4.0 + rescue) * mask * amount
     lab[..., 0] = lifted
     chroma = np.sqrt(a * a + b * b)
@@ -251,7 +279,9 @@ def brighten_eyes(img: np.ndarray, regions: FaceRegions, amount: float, face: Fa
     if face is not None and face.landmarks.shape[0] >= 478:        # iris centers: 468 (right), 473 (left)
         spark = np.zeros(regions.shape, np.float32)
         for center, edge in ((468, 469), (473, 474)):
-            r = max(1.0, float(np.linalg.norm(face.pt(center) - face.pt(edge))))
+            r = float(np.linalg.norm(face.pt(center) - face.pt(edge)))
+            if r < 5.0:      # iris too small: a drawn catchlight would just be a white dot
+                continue
             c = face.pt(center) + np.array([-0.3, -0.35]) * r
             gaussian_ellipse(regions.shape, c, 0.22 * r, 0.22 * r, out=spark)
         spark = np.clip(spark, 0.0, 1.0) * mask * (0.55 * amount)
