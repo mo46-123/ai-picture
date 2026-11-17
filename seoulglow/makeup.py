@@ -47,6 +47,18 @@ def lips(img: np.ndarray, face: Face, regions: FaceRegions, color: tuple[int, in
     # (lips in shadow) and never by much: lifting normal lips makes them chalky.
     gap = float(target[0]) - mean_l
     lab[..., 0] += (gap * 0.3 if gap < 0.0 else min(max(gap - 6.0, 0.0) * 0.7, 14.0)) * weight
+    # Soften what makes lips look harsh: the dark seam between them and dark corners
+    # are lifted part-way to the lip tone, and tiny white speckles of gloss are
+    # gathered into one small soft sheen. An open mouth (teeth, dark cavity) is skipped.
+    area = blur(regions.lips_outer, 0.012 * face.iod) * float(np.clip(intensity, 0.0, 1.0))
+    closed = float(regions.inner_mouth.sum()) < 0.002 * face.iod ** 2
+    area = area if closed else area * (1.0 - np.clip(blur(regions.inner_mouth, 0.012 * face.iod) * 2.0, 0.0, 1.0))
+    lit = lab[..., 0]
+    lit += np.clip(mean_l - 5.0 - lit, 0.0, 30.0) * 0.5 * area
+    soft = ops.gaussian(lit, 0.03 * face.iod)
+    speck = np.clip(lit - soft - 3.0, 0.0, None) * mask
+    lit += -speck * 0.65 + ops.gaussian(speck, 0.022 * face.iod) * 0.9
+    weight = np.maximum(weight, area)
     out = ops.from_lab_where(img, lab, weight)
 
     if gloss > 0.0:
@@ -332,7 +344,8 @@ def iris_lens(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) 
         d = np.sqrt((xs - c[0]) ** 2 + (ys - c[1]) ** 2) / r
         # the band between pupil and rim is what a colored lens changes
         pupil = np.maximum(pupil, 1.0 - smoothstep(0.26, 0.42, d))
-        iris = np.maximum(iris, smoothstep(0.38, 0.6, d) * (1.0 - smoothstep(0.82, 1.0, d)))
+        # lightest just outside the pupil, fading toward the rim: the layered look of a real iris
+        iris = np.maximum(iris, smoothstep(0.34, 0.52, d) * (1.0 - 0.75 * smoothstep(0.5, 1.0, d)) * (1.0 - smoothstep(0.9, 1.05, d)))
         ring = np.maximum(ring, smoothstep(0.7, 0.98, d) * (1.0 - smoothstep(0.98, 1.2, d)))   # soft rim
         gaussian_ellipse(shape, c + np.array([-0.32, -0.36]) * r, 0.17 * r, 0.17 * r, out=spark)
         gaussian_ellipse(shape, c + np.array([0.36, 0.34]) * r, 0.09 * r, 0.09 * r, out=spark, weight=0.5)
@@ -342,9 +355,9 @@ def iris_lens(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) 
     lab = ops.to_lab(img)
     lightness = lab[..., 0]
     # dark irises are lifted toward a mid grey; an iris that is already light is left alone
-    lab[..., 0] = lightness + np.clip(40.0 - lightness, -30.0, 20.0) * iris * 0.7 - np.clip(lightness - 14.0, 0.0, None) * ring * 0.4
+    lab[..., 0] = lightness + np.clip(50.0 - lightness, -30.0, 36.0) * iris * 0.8 - np.clip(lightness - 14.0, 0.0, None) * ring * 0.22
     lab[..., 1] += (-1.0 - lab[..., 1]) * iris * 0.45      # toward a cool grey
-    lab[..., 2] += (-9.0 - lab[..., 2]) * iris * 0.45
+    lab[..., 2] += (-12.0 - lab[..., 2]) * iris * 0.55
     weight = np.maximum(iris, ring)
     out = ops.from_lab_where(img, lab, weight)
     spark = np.clip(spark, 0.0, 1.0) * eye * (0.6 * k)

@@ -23,7 +23,7 @@ class LipShade:
 
 
 LIP_SHADES: dict[str, LipShade] = {s.id: s for s in [
-    LipShade("peach", "珊瑚蜜桃", (240, 116, 104)),
+    LipShade("peach", "珊瑚蜜桃", (240, 112, 124)),
     LipShade("berry", "柔莓粉", (220, 106, 136)),
     LipShade("milktea", "奶茶豆沙", (186, 108, 98)),
     LipShade("strawberry", "草莓咬唇", (216, 48, 72)),
@@ -79,6 +79,7 @@ class Preset:
     lip_plump: float       # 丰唇
     sculpt: float          # 修容高光
     lens: float            # 美瞳
+    hair: float            # deeper, glossier hair around the face
     # skin clean-up (follows the 磨皮 slider)
     dark_circles: float
     folds: float
@@ -115,9 +116,9 @@ PRESETS: dict[str, Preset] = {p.id: p for p in [
         aegyo=0.9, eye_brighten=0.8, teeth=0.6,
         brow_rgb=(122, 94, 80), brow=0.3, shadow_rgb=(240, 156, 150), shadow=0.7, liner=0.7,
         liner_tail=0.07, liner_drop=0.0, shadow_outer=0.0, blush_nose=0.0, brow_shape=0.3, lash=0.6, lip_plump=0.6,
-        sculpt=1.0, lens=1.0,
+        sculpt=1.0, lens=1.0, hair=1.0,
         dark_circles=0.75, folds=0.6,
-        grade=Grade(exposure=0.04, contrast=0.24, highlights=-0.08, shadows=-0.45,
+        grade=Grade(exposure=0.04, contrast=0.22, highlights=-0.08, shadows=-0.28,
                     temperature=-0.22, tint=0.03, saturation=-0.10, vibrance=0.08, fade=0.0,
                     shadow_tint=(215, 0.25), highlight_tint=(350, 0.20),
                     green_shift=20, green_sat=-0.20, glow=0.08),
@@ -134,7 +135,7 @@ PRESETS: dict[str, Preset] = {p.id: p for p in [
         aegyo=0.6, eye_brighten=0.6, teeth=0.5,
         brow_rgb=(128, 100, 84), brow=0.35, shadow_rgb=(190, 132, 104), shadow=0.85, liner=0.3,
         liner_tail=0.03, liner_drop=0.0, shadow_outer=0.25, blush_nose=0.0, brow_shape=0.3, lash=0.8, lip_plump=0.4,
-        sculpt=0.6, lens=0.6,
+        sculpt=0.6, lens=0.6, hair=0.3,
         dark_circles=0.75, folds=0.6,
         grade=Grade(exposure=0.18, contrast=-0.18, highlights=-0.30, shadows=0.25,
                     temperature=0.07, tint=0.04, saturation=-0.10, fade=0.05,
@@ -153,7 +154,7 @@ PRESETS: dict[str, Preset] = {p.id: p for p in [
         aegyo=1.0, eye_brighten=0.75, teeth=0.6,
         brow_rgb=(128, 98, 84), brow=0.3, shadow_rgb=(236, 140, 150), shadow=0.6, liner=0.6,
         liner_tail=0.06, liner_drop=0.035, shadow_outer=0.0, blush_nose=0.8, brow_shape=0.6, lash=1.0, lip_plump=0.6,
-        sculpt=0.8, lens=0.9,
+        sculpt=0.8, lens=0.9, hair=0.5,
         dark_circles=0.75, folds=0.6,
         grade=Grade(exposure=0.12, contrast=-0.12, highlights=-0.20, shadows=0.20,
                     temperature=0.04, tint=0.08, saturation=-0.08, vibrance=0.05, fade=0.06,
@@ -172,7 +173,7 @@ PRESETS: dict[str, Preset] = {p.id: p for p in [
         aegyo=0.0, eye_brighten=0.5, teeth=0.6,
         brow_rgb=(84, 72, 70), brow=0.4, shadow_rgb=(150, 118, 118), shadow=0.8, liner=0.85,
         liner_tail=0.09, liner_drop=-0.03, shadow_outer=1.0, blush_nose=0.0, brow_shape=-0.5, lash=0.9, lip_plump=0.3,
-        sculpt=0.9, lens=0.8,
+        sculpt=0.9, lens=0.8, hair=0.8,
         dark_circles=0.8, folds=0.6,
         grade=Grade(exposure=0.10, contrast=0.02, highlights=-0.15, shadows=0.18,
                     temperature=-0.15, tint=0.02, saturation=-0.12, fade=0.07,

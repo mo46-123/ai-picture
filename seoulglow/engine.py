@@ -199,6 +199,7 @@ def _beautify_face(img: np.ndarray, face: Face, p: Params) -> np.ndarray:
     was = ops.luminance(original)
     dark = (1.0 - smoothstep(0.1, 0.28, was)) * (1.0 - np.clip(regions.skin * 2.0, 0.0, 1.0)) * (1.0 - regions.eyes)
     img = img + (np.minimum(original, img) - img) * dark[..., None]
+    img = skin.hair_depth(img, regions, min(1.0, p.filter / max(pr.default_filter, 1e-6)) * pr.hair)
     img = _local(img, face, F.LIPS_INNER, 0.06 * iod, lambda s, f, r: makeup.whiten_teeth(
         s, f, r, pr.teeth * min(1.0, m + 0.3)))
     return img

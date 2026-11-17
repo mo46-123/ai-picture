@@ -286,8 +286,8 @@ def glass_glow(img: np.ndarray, face: Face, regions: FaceRegions, amount: float,
     gaussian_ellipse(shape, bridge, 0.02 * iod, 0.15 * iod, ang, out=spots, weight=1.0)
     gaussian_ellipse(shape, face.pt(F.NOSE_TIP) - y * 0.03 * iod, 0.035 * iod, 0.03 * iod, ang, out=spots, weight=0.9)
     for side in ("right", "left"):
-        c = face.eye_center(side) + y * 0.33 * iod + face.outward(side) * 0.2 * iod
-        tilt = ang + (-22.0 if side == "left" else 22.0)
+        c = face.eye_center(side) + y * 0.33 * iod + face.outward(side) * 0.25 * iod
+        tilt = ang + (-24.0 if side == "left" else 24.0)
         gaussian_ellipse(shape, c, 0.13 * iod, 0.05 * iod, tilt, out=spots, weight=1.0)
     gaussian_ellipse(shape, face.brow_mid - y * 0.36 * iod, 0.13 * iod, 0.05 * iod, ang, out=spots, weight=0.6)
     gaussian_ellipse(shape, face.pt(152) - y * 0.17 * iod, 0.06 * iod, 0.03 * iod, ang, out=spots, weight=0.5)
@@ -319,13 +319,13 @@ def sculpt(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) -> 
     light = np.zeros(shape, np.float32)
     shade = np.zeros(shape, np.float32)
     tip = face.pt(F.NOSE_TIP)
-    gaussian_ellipse(shape, tip - y * 0.02 * iod, 0.05 * iod, 0.045 * iod, ang, out=light, weight=1.0)
+    gaussian_ellipse(shape, tip - y * 0.02 * iod, 0.05 * iod, 0.045 * iod, ang, out=light, weight=0.8)
     gaussian_ellipse(shape, (face.pt(6) + face.pt(195)) / 2.0, 0.025 * iod, 0.16 * iod, ang, out=light, weight=0.5)
     for side in ("right", "left"):
         out = face.outward(side)
-        cheekbone = face.eye_center(side) + y * 0.38 * iod + out * 0.2 * iod
-        tilt = ang + (-20.0 if side == "left" else 20.0)
-        gaussian_ellipse(shape, cheekbone, 0.17 * iod, 0.06 * iod, tilt, out=light, weight=1.0)
+        cheekbone = face.eye_center(side) + y * 0.33 * iod + out * 0.25 * iod   # just below the eye's tail
+        tilt = ang + (-24.0 if side == "left" else 24.0)
+        gaussian_ellipse(shape, cheekbone, 0.15 * iod, 0.045 * iod, tilt, out=light, weight=1.1)
         gaussian_ellipse(shape, tip + out * 0.17 * iod + y * 0.0 * iod, 0.04 * iod, 0.06 * iod, ang,
                          out=shade, weight=0.8)                                  # nose wing
     for index in (172, 397, 136, 365, 150, 379):                                 # along the jaw
@@ -339,14 +339,14 @@ def sculpt(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) -> 
     h, w = shape
     ys, xs = np.mgrid[0:h, 0:w].astype(np.float32)
     below = ((xs - face.eye_mid[0]) * y[0] + (ys - face.eye_mid[1]) * y[1]) / max(iod, 1.0)
-    side_fall = (1.0 - smoothstep(0.0, 0.3, depth)) * smoothstep(-0.1, 0.35, below)
+    side_fall = (1.0 - smoothstep(0.0, 0.34, depth)) * smoothstep(-0.1, 0.35, below)
     shade = np.maximum(np.clip(shade, 0.0, 1.0), side_fall)
     skin = regions.skin
     light = np.clip(light, 0.0, 1.0) * skin
     shade = shade * skin * (1.0 - light)
     lab = ops.to_lab(img)
     lightness = lab[..., 0]
-    lab[..., 0] = lightness + ((100.0 - lightness) * 0.3 * light - lightness * 0.075 * shade) * amount
+    lab[..., 0] = lightness + ((100.0 - lightness) * 0.32 * light - lightness * 0.1 * shade) * amount
     return ops.from_lab_where(img, lab, np.maximum(light, shade))
 
 
@@ -364,3 +364,35 @@ def matte(img: np.ndarray, regions: FaceRegions, amount: float) -> np.ndarray:
     target = lum - over * 0.75 * amount * skin
     ratio = np.where(lum > 1e-4, target / np.maximum(lum, 1e-4), 1.0)
     return np.clip(img * ratio[..., None], 0.0, 1.0)
+
+
+def hair_depth(img: np.ndarray, regions: FaceRegions, amount: float) -> np.ndarray:
+    """Deep hair with light on the strands instead of a flat grey-blue haze.
+
+    Everything dark around the face that is not skin (hair, roots under a hat brim,
+    the brim itself) is pushed down, while the highlights that already run along
+    the strands are kept and strengthened, so the hair reads as black and glossy.
+    """
+    if amount <= 0.0:
+        return img
+    iod = regions.iod
+    lum = ops.luminance(img)
+    zone = 1.0 - smoothstep(0.3, 0.5, ops.gaussian(lum, 0.05 * iod))          # broadly dark areas
+    zone = zone * (1.0 - np.clip(regions.skin * 2.5, 0.0, 1.0)) * (1.0 - np.clip(regions.features * 1.5, 0.0, 1.0))
+    # Only what can be hair: not skin-colored (ears, a shaded jaw), not itself light,
+    # and close to neutral, so a dark colored wall or dress keeps its color.
+    lab = ops.to_lab(img)
+    chroma = np.sqrt(lab[..., 1] ** 2 + lab[..., 2] ** 2)
+    chroma = chroma * np.where(lab[..., 2] < -2.0, 0.4, 1.0)      # a blue cast on black hair is haze, not color
+    zone = zone * (1.0 - np.clip(regions.skin_probability_loose * 2.0, 0.0, 1.0))
+    zone = zone * (1.0 - smoothstep(0.45, 0.65, lum)) * (1.0 - smoothstep(14.0, 26.0, chroma))
+    zone = ops.gaussian(zone, 0.01 * iod)
+    zone = zone * float(np.clip(amount, 0.0, 1.0))
+    base = ops.gaussian(lum, 0.045 * iod)
+    strands = np.clip(lum - base, 0.0, 0.2)                                   # light along the hair
+    gain = 0.55 + 0.45 * smoothstep(0.18, 0.55, lum)                              # darks down, lights stay
+    out = img * (1.0 + (gain - 1.0) * zone)[..., None]
+    out = out + (strands * 1.5 * zone)[..., None] * np.array([0.96, 0.98, 1.0], np.float32)
+    grey = ops.luminance(out)[..., None]
+    out = out + (grey - out) * (0.3 * zone)[..., None]                       # take the blue out of the haze
+    return np.clip(out, 0.0, 1.0)
