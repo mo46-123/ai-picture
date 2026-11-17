@@ -82,20 +82,40 @@ def displacement_warp(img: np.ndarray, centers: np.ndarray, shifts: np.ndarray, 
     return out
 
 
+def _slim_profile(rel: float) -> float:
+    """How much the contour moves at height ``rel`` (0 = eye line, 1 = chin).
+
+    One smooth bump: nothing at the temples, most at the lower cheek, about half at
+    the chin. A smooth profile keeps the outline a single clean curve; per-point
+    weights that peak at the jaw corner turn it into straight segments with a kink.
+    """
+    if rel <= 0.0:
+        return 0.0
+    if rel < 0.68:
+        return float(np.sin(0.5 * np.pi * rel / 0.68) ** 1.6)
+    t = min(1.0, (rel - 0.68) / 0.32)
+    return float(1.0 - 0.5 * (0.5 - 0.5 * np.cos(np.pi * t)))
+
+
 def slim_face(img: np.ndarray, face: Face, strength: float) -> np.ndarray:
-    """Pull the cheek and jaw contour toward the face's center line (V 脸)."""
+    """瘦脸: shrink the lower face toward its center, like scaling the outline down."""
     if strength <= 0.0:
         return img
-    iod = face.iod
-    magnitude = 0.13 * iod * float(np.clip(strength, 0.0, 1.5))
-    up = -face.y_axis
+    iod, y = face.iod, face.y_axis
+    magnitude = 0.12 * iod * float(np.clip(strength, 0.0, 1.5))
+    chin_drop = max(float(np.dot(face.pt(F.CHIN) - face.eye_mid, y)), 0.5 * iod)
+    center = face.eye_mid + y * 0.55 * chin_drop            # around the base of the nose
+    oval = face.pts(F.FACE_OVAL)
+    dense = np.vstack([oval, (oval + np.roll(oval, -1, axis=0)) / 2.0])   # landmarks + midpoints
     centers, shifts = [], []
-    for side, contour in (("right", F.JAW_CONTOUR_RIGHT + F.CHIN_LIFT),
-                          ("left", F.JAW_CONTOUR_LEFT)):
-        inward = -face.outward(side)
-        for index, inward_share, up_share in contour:
-            centers.append(face.pt(index))
-            shifts.append((inward * inward_share + up * up_share) * magnitude)
+    for p in dense:
+        weight = _slim_profile(float(np.dot(p - face.eye_mid, y)) / chin_drop)
+        if weight <= 0.0:
+            continue
+        direction = center - p
+        direction = direction / max(float(np.linalg.norm(direction)), 1e-6)
+        centers.append(p)
+        shifts.append(direction * magnitude * weight)
     for index in F.SLIM_ANCHORS:  # keep the inner face still
         centers.append(face.pt(index))
         shifts.append(np.zeros(2))
