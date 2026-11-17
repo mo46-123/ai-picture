@@ -157,7 +157,7 @@ def _adapt(rgb: tuple[int, int, int], light: np.ndarray) -> np.ndarray:
 
 
 DIM_FACE_L = 56.0     # faces darker than this (L*) are underexposed
-LIFT_TARGET_L = 58.0  # the whole-photo lift brings the face up to about here; relight does the rest
+LIFT_TARGET_L = 54.0  # the whole-photo lift brings the face up to about here; relight does the rest
 MAX_LIFT = 2.4        # at most ~1.3 EV
 
 
@@ -227,7 +227,8 @@ def _beautify_face(img: np.ndarray, face: Face, p: Params) -> np.ndarray:
     m = p.makeup * face.frontalness   # no makeup on faces turned away from the camera
     regions = FaceRegions(img, face)
     original = img
-    relit = skin.relight(img, regions, min(1.0, p.whiten / max(pr.whiten, 1e-6)))
+    relit = skin.relight(img, regions, min(1.0, p.whiten / max(pr.whiten, 1e-6)),
+                         target_l=float(NOMINAL_SKIN[0]) - 8.0 * p.dark_scene)   # a dark photo stays a little darker
     if relit is not img:   # the skin model must be rebuilt on the corrected colors
         img, regions = relit, FaceRegions(relit, face)
     img = skin.remove_spots(img, regions, p.smooth)
@@ -236,6 +237,7 @@ def _beautify_face(img: np.ndarray, face: Face, p: Params) -> np.ndarray:
     img = skin.under_eye(img, face, regions, pr.dark_circles * p.cleanup * face.frontalness)
     img = skin.soften_folds(img, face, regions, pr.folds * p.cleanup * face.frontalness)
     img = skin.brighten(img, regions, p.whiten, pr.tone_a * p.tone_scale, pr.tone_b * p.tone_scale)
+    img = skin.relief(img, original, face, regions, pr.relief, boost=1.35)
     light = _skin_light(img, regions)                     # measure again, after brightening
     dim = float(np.clip(light[0] / 62.0, 0.35, 1.0))     # darkening makeup is eased off on dim faces
     blush_c, brow_c, shadow_c = _adapt(pr.blush_rgb, light), _adapt(pr.brow_rgb, light), _adapt(pr.shadow_rgb, light)
@@ -320,10 +322,9 @@ def process(rgb: np.ndarray, preset_id: str | None, adj: Adjustments | None,
 
     grade = p.preset.grade
     if p.dark_scene > 0.0:
-        # In a dark photo the background is already black; deepening shadows and adding
-        # contrast would cut the brightened face out of it even more.
-        grade = replace(grade, shadows=grade.shadows * (1.0 - 0.75 * p.dark_scene) if grade.shadows < 0 else grade.shadows,
-                        contrast=grade.contrast * (1.0 - 0.5 * p.dark_scene) if grade.contrast > 0 else grade.contrast)
+        # In a dark photo the background is already black; deepening the shadows much
+        # more would cut the brightened face out of it.
+        grade = replace(grade, shadows=grade.shadows * (1.0 - 0.4 * p.dark_scene) if grade.shadows < 0 else grade.shadows)
     img = color.apply_grade(img, grade, p.filter)
     # Retouching and the soft grade cost a little crispness; give it back. Faces get a
     # second, finer pass (feathered, so no visible box) to make eyes, brows and lips crisp.

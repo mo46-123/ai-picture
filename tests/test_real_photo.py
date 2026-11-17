@@ -73,7 +73,7 @@ def test_dark_photo_is_brightened_as_a_whole_not_just_the_face(analyzer, photo):
     assert dark_scene > 0.5
     assert _face_lightness(lifted, dark_faces[0]) > _face_lightness(img, dark_faces[0]) + 8.0
     corner = (slice(0, 40), slice(0, 40))      # the background is brightened too
-    assert lifted[corner].mean() > img[corner].mean() * 1.3
+    assert lifted[corner].mean() > img[corner].mean() * 1.15
 
     out = process(dark, "glass_skin", Adjustments(), dark_faces)
     assert out.shape == dark.shape and out.dtype == np.uint8

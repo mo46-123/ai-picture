@@ -178,7 +178,8 @@ def soften_folds(img: np.ndarray, face: Face, regions: FaceRegions, amount: floa
 NOMINAL_SKIN = (68.0, 13.0, 17.0)   # Lab of evenly lit light skin
 
 
-def relight(img: np.ndarray, regions: FaceRegions, strength: float = 1.0) -> np.ndarray:
+def relight(img: np.ndarray, regions: FaceRegions, strength: float = 1.0,
+            target_l: float | None = None) -> np.ndarray:
     """补光: bring a face that is in shade or under colored light back to normal light.
 
     A retoucher's first move on a dim, blue-grey face is to lift its exposure and
@@ -193,7 +194,8 @@ def relight(img: np.ndarray, regions: FaceRegions, strength: float = 1.0) -> np.
         return img
     lab = ops.to_lab(img)
     mean = [float((lab[..., c] * core).sum() / total) for c in range(3)]
-    gain = float(np.clip(NOMINAL_SKIN[0] / max(mean[0], 1.0) - 1.0, 0.0, 0.7))
+    goal = NOMINAL_SKIN[0] if target_l is None else target_l
+    gain = float(np.clip(goal / max(mean[0], 1.0) - 1.0, 0.0, 0.7))
     shift_a = float(np.clip(0.65 * (NOMINAL_SKIN[1] - mean[1]), -4.0, 10.0))
     shift_b = float(np.clip(0.65 * (NOMINAL_SKIN[2] - mean[2]), -6.0, 14.0))
     if gain < 0.03 and abs(shift_a) < 1.5 and abs(shift_b) < 1.5:
@@ -215,6 +217,55 @@ def relight(img: np.ndarray, regions: FaceRegions, strength: float = 1.0) -> np.
         lab[..., 0] *= 1.0 + 0.14 * key * (1.0 - smoothstep(62.0, 88.0, lab[..., 0]))
         lab[..., 2] += 2.5 * key
     return ops.from_lab_where(img, lab, w)
+
+
+def _masked_blur(x: np.ndarray, weight: np.ndarray, sigma: float) -> np.ndarray:
+    """Gaussian average of ``x`` over the pixels where ``weight`` is set (hair and
+    background around the face don't leak into the face's averages)."""
+    return ops.gaussian(x * weight, sigma) / np.maximum(ops.gaussian(weight, sigma), 1e-3)
+
+
+def _under_eye_band(face: Face, regions: FaceRegions) -> np.ndarray:
+    iod, y = face.iod, face.y_axis
+    band = np.zeros(regions.shape, np.float32)
+    for lid in (F.RIGHT_LOWER_LID, F.LEFT_LOWER_LID):
+        pts = face.pts(lid)
+        band = np.maximum(band, fill_poly(regions.shape, np.vstack([pts + y * 0.02 * iod, pts[::-1] + y * 0.27 * iod])))
+    return blur(band, 0.05 * iod)
+
+
+def relief(img: np.ndarray, original: np.ndarray, face: Face, regions: FaceRegions,
+           amount: float, boost: float = 1.2) -> np.ndarray:
+    """立体: give the face back its own light and shade.
+
+    Brightening, whitening and evening the skin each lift the shadows a little more
+    than the lights; together they flatten the face into a pale, even disc. Here the
+    face's large-scale light and shade (the cheekbones against the hollows below them,
+    the nose against its sides, the jaw, the eye sockets, the temples) is measured on
+    the photo before retouching and put back, scaled to the new brightness and a little
+    stronger. Blemish-sized detail is far below this scale and stays gone; the band
+    under the eyes is left out so dark circles don't come back.
+    """
+    if amount <= 0.0:
+        return img
+    iod = face.iod
+    w = regions.skin
+    total = float(w.sum())
+    if total < 50.0:
+        return img
+    lab = ops.to_lab(img)
+    now, before = lab[..., 0], ops.to_lab(original)[..., 0]
+    small, large = 0.08 * iod, 0.4 * iod
+    shape_before = _masked_blur(before, w, small) - _masked_blur(before, w, large)
+    shape_now = _masked_blur(now, w, small) - _masked_blur(now, w, large)
+    # A shading ratio shows up larger in L* on brighter skin: scale by (L*+16).
+    m_before = float((before * w).sum() / total)
+    m_now = float((now * w).sum() / total)
+    scale = float(np.clip((m_now + 16.0) / max(m_before + 16.0, 1.0), 0.8, 2.0))
+    goal = np.clip(shape_before * scale * boost, -25.0, 25.0)
+    zone = w * (1.0 - _under_eye_band(face, regions)) * float(np.clip(amount, 0.0, 1.5))
+    lab[..., 0] = now + (goal - shape_now) * zone
+    return ops.from_lab_where(img, lab, zone)
 
 
 def brighten(img: np.ndarray, regions: FaceRegions, amount: float,
@@ -331,7 +382,7 @@ def glass_glow(img: np.ndarray, face: Face, regions: FaceRegions, amount: float,
         gaussian_ellipse(shape, c, 0.75 * sx, 0.75 * sy, a, out=sheen)
     sheen = np.clip(sheen, 0.0, 1.0) * skin * smoothstep(0.3, 0.75, lum)
 
-    shine = natural * (2.2 * amount) + spots * (0.42 * amount) + sheen * (0.3 * amount)
+    shine = natural * (1.8 * amount) + spots * (0.42 * amount) + sheen * (0.2 * amount)
     tint = np.array([1.0, 0.985, 0.97], np.float32)
     out = ops.screen(img, np.clip(shine, 0.0, 0.6)[..., None] * tint)
 
@@ -353,6 +404,7 @@ def sculpt(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) -> 
         return img
     iod, shape, ang, y = face.iod, regions.shape, face.angle_deg, face.y_axis
     light = np.zeros(shape, np.float32)
+    cheek = np.zeros(shape, np.float32)
     shade = np.zeros(shape, np.float32)
     wing = np.zeros(shape, np.float32)
     tip = face.pt(F.NOSE_TIP)
@@ -361,10 +413,17 @@ def sculpt(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) -> 
     for side in ("right", "left"):
         out = face.outward(side)
         c, sx, sy, a = cheekbone_patch(face, side)
-        gaussian_ellipse(shape, c, sx, sy, a, out=light, weight=0.75)            # soft, wide edges
-        gaussian_ellipse(shape, c, 0.55 * sx, 0.55 * sy, a, out=light, weight=0.45)  # on its high point
+        gaussian_ellipse(shape, c, 0.85 * sx, 0.85 * sy, a, out=cheek, weight=0.6)    # soft edges
+        gaussian_ellipse(shape, c, 0.5 * sx, 0.5 * sy, a, out=cheek, weight=0.45)     # on its high point
         p, q = (face.pt(i) for i in _NOSE_WING[side])
         gaussian_ellipse(shape, (p + q) / 2.0 + out * 0.015 * iod, 0.04 * iod, 0.065 * iod, ang, out=wing)
+        # the hollow under the cheekbone: a soft shadow from the front of the ear toward
+        # the corner of the mouth, fading out halfway (the main line of contouring)
+        start = face.pt(_EAR_FRONT[side][0])
+        v = face.pt(F.MOUTH_RIGHT if side == "right" else F.MOUTH_LEFT) - start
+        length = max(float(np.linalg.norm(v)), 1e-6)
+        gaussian_ellipse(shape, start + 0.3 * v, 0.22 * length, 0.055 * iod,
+                         float(np.degrees(np.arctan2(v[1], v[0]))), out=shade, weight=0.85)
     tip_dir = tip
     for index in (132, 361, 58, 288, 172, 397, 136, 365, 150, 379):   # in front of the ears, the jaw turn
         jaw = face.pt(index)
@@ -394,19 +453,23 @@ def sculpt(img: np.ndarray, face: Face, regions: FaceRegions, amount: float) -> 
     ear_fall = ear_fall * smoothstep(-0.05, 0.3, below)
     skin = regions.skin
     light = np.clip(light, 0.0, 1.0) * skin
-    wing = np.clip(wing, 0.0, 1.0) * skin * (1.0 - light)
-    shade = shade * skin * (1.0 - light)
-    ear_fall = ear_fall * skin * (1.0 - light)
+    cheek = np.clip(cheek, 0.0, 1.0) * skin * (1.0 - light)
+    lit = np.maximum(light, cheek)
+    wing = np.clip(wing, 0.0, 1.0) * skin * (1.0 - lit)
+    shade = shade * skin * (1.0 - lit)
+    ear_fall = ear_fall * skin * (1.0 - lit)
     lab = ops.to_lab(img)
     lightness = lab[..., 0]
     # tone down the long thin highlight on the middle of the bridge (keep the tip)
-    bridge = _bridge_line(face, shape) * skin * (1.0 - np.clip(light * 2.0, 0.0, 1.0))
+    bridge = _bridge_line(face, shape) * skin * (1.0 - np.clip(lit * 2.0, 0.0, 1.0))
     excess = np.clip(lightness - ops.gaussian(lightness, 0.08 * iod), 0.0, None)
     lightness = lightness - excess * bridge * min(1.0, 0.8 * amount)
-    lab[..., 0] = lightness + ((100.0 - lightness) * 0.32 * light
+    # The cheekbones get a restrained light: on a face that is not very bright yet, a
+    # strong one turns into two pale patches. Depth comes from the shadows instead.
+    lab[..., 0] = lightness + ((100.0 - lightness) * (0.32 * light + 0.17 * cheek)
                                - lightness * (0.13 * shade + 0.16 * ear_fall + 0.09 * wing)) * amount
     lab[..., 1] += 4.0 * wing * amount            # shadows on skin are a little pink, not grey
-    return ops.from_lab_where(img, lab, np.maximum.reduce([light, shade, ear_fall, wing, bridge]))
+    return ops.from_lab_where(img, lab, np.maximum.reduce([light, cheek, shade, ear_fall, wing, bridge]))
 
 
 def matte(img: np.ndarray, regions: FaceRegions, amount: float) -> np.ndarray:
